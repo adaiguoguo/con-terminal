@@ -4,9 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.98` - unreleased
+## `v0.1.0-beta.98` - 2026-09-16
 
 ### Fixed
+
+**Terminal**
+
+- TUI applications can now copy plain text to the system clipboard by default,
+  matching established terminal behavior. Explicit opt-outs, clipboard read
+  protection, text validation, and payload limits remain in place. _(PR
+  [#356](https://github.com/nowledge-co/con-terminal/pull/356) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
 **Windows**
 
