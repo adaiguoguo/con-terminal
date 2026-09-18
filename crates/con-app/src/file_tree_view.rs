@@ -8,12 +8,12 @@
 //! ---
 //! - Row height: 24 px.
 //! - Indent: 12 px per depth level.
-//! - Icons: phosphor/folder.svg, phosphor/folder-open.svg, phosphor/file-text.svg,
-//!   phosphor/image.svg for image files.
+//! - Icons come from `file_icons::icon_for_path`: either a Phosphor SVG or,
+//!   for languages that have a Seti glyph, a Nerd Font glyph drawn in the
+//!   bundled icon font.
 //! - Active (open) file row gets a subtle accent bg.
 //! - No borders — surface separation via bg opacity.
 
-use crate::editor_syntax;
 use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
@@ -22,6 +22,7 @@ use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::file_icons::{FILE_ICON_FONT_FAMILY, FileIcon, icon_for_path};
 use crate::ui_scale::ui_icon_px;
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -207,6 +208,29 @@ fn row_has_open_button(entry: &FileEntry) -> bool {
     !entry.is_dir
 }
 
+fn render_file_icon(icon: FileIcon, size: gpui::Pixels, color: gpui::Hsla) -> gpui::AnyElement {
+    match icon {
+        FileIcon::Svg(svg_path) => svg()
+            .path(svg_path)
+            .size(size)
+            .flex_shrink_0()
+            .text_color(color)
+            .into_any_element(),
+        FileIcon::Glyph(glyph) => div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(size)
+            .flex_shrink_0()
+            .font_family(FILE_ICON_FONT_FAMILY)
+            .text_size(size)
+            .line_height(size)
+            .text_color(color)
+            .child(SharedString::from(glyph.to_string()))
+            .into_any_element(),
+    }
+}
+
 /// Build a flat entry list for `dir` at `depth`. Only one level deep
 /// (children of expanded dirs are inserted lazily by `toggle_dir`).
 fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry> {
@@ -307,17 +331,7 @@ impl Render for FileTreeView {
                         None
                     };
 
-                    let icon = if is_dir {
-                        if is_expanded {
-                            "phosphor/folder-open.svg"
-                        } else {
-                            "phosphor/folder.svg"
-                        }
-                    } else if editor_syntax::is_image_path(&path) {
-                        "phosphor/image.svg"
-                    } else {
-                        "phosphor/file-text.svg"
-                    };
+                    let icon = icon_for_path(&path, is_dir, is_expanded);
 
                     let icon_color = if is_dir {
                         list_theme.primary.opacity(0.75)
@@ -366,13 +380,11 @@ impl Render for FileTreeView {
                         } else {
                             div().w(px(10.0)).flex_shrink_0().into_any_element()
                         })
-                        .child(
-                            svg()
-                                .path(icon)
-                                .size(ui_icon_px(&list_theme, ICON_SIZE))
-                                .flex_shrink_0()
-                                .text_color(icon_color),
-                        )
+                        .child(render_file_icon(
+                            icon,
+                            ui_icon_px(&list_theme, ICON_SIZE),
+                            icon_color,
+                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -480,6 +492,17 @@ mod tests {
         fs::write(root.join("apple.txt"), "a").unwrap();
         fs::write(root.join(".hidden"), "hidden").unwrap();
         root
+    }
+
+    #[gpui::test]
+    fn file_type_glyphs_use_the_bundled_font(_cx: &mut gpui::TestAppContext) {
+        let mut element =
+            render_file_icon(FileIcon::Glyph('\u{e68b}'), px(ICON_SIZE), gpui::black());
+        let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
+        assert_eq!(
+            text.font_family.as_ref().map(|font| font.as_ref()),
+            Some(FILE_ICON_FONT_FAMILY)
+        );
     }
 
     #[test]
