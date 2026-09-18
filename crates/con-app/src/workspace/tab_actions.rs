@@ -532,19 +532,29 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_title_changed(
         &mut self,
-        _entity: &Entity<GhosttyView>,
-        _event: &GhosttyTitleChanged,
+        entity: &Entity<GhosttyView>,
+        event: &GhosttyTitleChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Title changed — sync sidebar and tab bar.
-        self.sync_sidebar(cx);
-        // The OSC title change is the most reliable signal that a
-        // tab's purpose just shifted (`vim` → `bash`, `bash` → `htop`).
-        // Re-ask the AI for an updated label/icon. The engine
-        // dedupes on cache key so this is cheap if context didn't
-        // actually change.
-        self.request_tab_summaries(cx);
+        // Application-owned animation frames are not naming context changes.
+        if event.content_changed {
+            self.sync_sidebar(cx);
+            self.request_tab_summaries(cx);
+        } else if self.vertical_tabs_enabled() {
+            // Do not rebuild every tab's names, paths and SSH metadata at the
+            // application's animation cadence. Update only the owning row.
+            if let Some(index) = self.tabs.iter().position(|tab| {
+                tab.pane_tree
+                    .pane_id_for_entity(entity.entity_id())
+                    .is_some()
+            }) {
+                let entry = self.sidebar_entry(index, cx);
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.update_session(entry, cx);
+                });
+            }
+        }
         cx.notify();
     }
 

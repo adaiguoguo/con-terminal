@@ -626,7 +626,7 @@ impl ConWorkspace {
             let req = TabSummaryRequest {
                 tab_id: tab.summary_id,
                 cwd: terminal.current_dir(cx),
-                title: terminal.title(cx),
+                title: terminal.title_name(cx),
                 ssh_host: self.effective_remote_host_for_tab(i, &terminal, cx),
                 recent_commands: {
                     let mut histories: Vec<_> = tab.shell_history.iter().collect();

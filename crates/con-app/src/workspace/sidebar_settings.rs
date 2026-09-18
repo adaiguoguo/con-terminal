@@ -323,7 +323,7 @@ impl ConWorkspace {
             if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                 (
                     self.effective_remote_host_for_tab(index, terminal, cx),
-                    terminal.title(cx),
+                    terminal.title_name(cx),
                     terminal.current_dir(cx),
                 )
             } else {
@@ -601,53 +601,61 @@ impl ConWorkspace {
     }
 
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
-        let sessions: Vec<SessionEntry> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, tab)| {
-                let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
-                let (hostname, title, current_dir) =
-                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
-                        (
-                            self.effective_remote_host_for_tab(i, terminal, cx),
-                            terminal.title(cx),
-                            terminal.current_dir(cx),
-                        )
-                    } else {
-                        (None, Some(tab.title.clone()), None)
-                    };
-                let presentation = smart_tab_presentation(
-                    tab.user_label.as_deref(),
-                    tab.ai_label.as_deref(),
-                    tab.ai_icon.map(|k| k.svg_path()),
-                    hostname.as_deref(),
-                    title.as_deref(),
-                    current_dir.as_deref(),
-                    i,
-                    is_editor_only,
-                );
-                let pane_count = tab.pane_tree.pane_terminals().len();
-                SessionEntry {
-                    id: tab.summary_id,
-                    name: presentation.name,
-                    subtitle: presentation.subtitle,
-                    is_ssh: presentation.is_ssh,
-                    needs_attention: tab.needs_attention,
-                    progress: tab
-                        .pane_tree
-                        .focused_pane_terminal()
-                        .and_then(|terminal| terminal.progress(cx)),
-                    icon: presentation.icon,
-                    has_user_label: tab.user_label.is_some(),
-                    pane_count,
-                    color: tab.color,
-                }
-            })
+        let sessions = (0..self.tabs.len())
+            .map(|index| self.sidebar_entry(index, cx))
             .collect();
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.sync_sessions(sessions, self.active_tab, cx);
         });
+    }
+
+    /// Shared by full synchronization and the single-row title update path.
+    pub(super) fn sidebar_entry(&self, index: usize, cx: &App) -> SessionEntry {
+        let tab = &self.tabs[index];
+        let pane_count = tab.pane_tree.pane_terminals().len();
+        let (hostname, title, current_dir) =
+            if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                (
+                    self.effective_remote_host_for_tab(index, terminal, cx),
+                    terminal.title_name(cx),
+                    terminal.current_dir(cx),
+                )
+            } else {
+                (None, Some(tab.title.clone()), None)
+            };
+        let presentation = smart_tab_presentation(
+            tab.user_label.as_deref(),
+            tab.ai_label.as_deref(),
+            tab.ai_icon.map(|k| k.svg_path()),
+            hostname.as_deref(),
+            title.as_deref(),
+            current_dir.as_deref(),
+            index,
+            pane_count == 0,
+        );
+        SessionEntry {
+            id: tab.summary_id,
+            name: presentation.name,
+            subtitle: presentation.subtitle,
+            is_ssh: presentation.is_ssh,
+            needs_attention: tab.needs_attention,
+            title_indicator: tab_title_indicator(&tab.pane_tree, cx),
+            terminal_titles: tab
+                .pane_tree
+                .all_surface_terminals()
+                .into_iter()
+                .filter_map(|terminal| terminal.cached_title(cx))
+                .filter(|title| !title.is_empty())
+                .collect(),
+            progress: tab
+                .pane_tree
+                .focused_pane_terminal()
+                .and_then(|terminal| terminal.progress(cx)),
+            icon: presentation.icon,
+            has_user_label: tab.user_label.is_some(),
+            pane_count,
+            color: tab.color,
+        }
     }
 
     pub(super) fn on_palette_select(
