@@ -55,7 +55,9 @@ Appearance controls the parts of con you look at all day:
 - tab position
 - pane title bars in split layouts
 
-**App Icon** chooses which raccoon appears in the Dock and Cmd-Tab while con is running. The installed `.app` icon in Finder stays Classic. Save Appearance to keep the selection.
+**App Icon** previews your choice in the Dock and Cmd-Tab on macOS. Save Appearance to keep the selection and update the installed `.app` icon used by Finder and system search. Search tools may cache their icons. Choose Classic and save to restore the bundled icon.
+
+The installed app must be writable; running from a read-only disk image or with `cargo run` only changes the running icon. Con reapplies the saved file icon at startup after an app update. Custom icons use macOS file metadata, not changes to the signed icon resource. This metadata can make `codesign --strict` reject a customized installation even though ordinary signature verification passes; release artifacts are still verified strictly before distribution.
 
 Start with readability. Pick a theme with clear contrast, then adjust opacity or
 blur only if the terminal remains easy to scan.
