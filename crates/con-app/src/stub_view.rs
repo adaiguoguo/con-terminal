@@ -19,8 +19,9 @@ use gpui_component::ActiveTheme;
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
-#[allow(dead_code)]
-pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyTitleChanged {
+    pub content_changed: bool,
+}
 pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
@@ -44,6 +45,7 @@ pub struct GhosttyView {
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
     initial_cwd: Option<String>,
+    pub(crate) terminal_title: con_core::terminal_title::TerminalTitle,
     #[allow(dead_code)]
     initial_font_size: f32,
 }
@@ -67,6 +69,7 @@ impl GhosttyView {
             terminal: None,
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
+            terminal_title: Default::default(),
             initial_font_size: font_size,
         }
     }

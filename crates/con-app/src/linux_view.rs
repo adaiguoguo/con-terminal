@@ -226,7 +226,9 @@ fn physical_cell_size(font_size_px: f32, scale_factor: f32) -> (u32, u32) {
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
-pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyTitleChanged {
+    pub content_changed: bool,
+}
 pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
@@ -261,7 +263,7 @@ pub struct GhosttyView {
     initial_font_size: f32,
     initialized: bool,
     process_exit_emitted: bool,
-    last_title: Option<String>,
+    pub(crate) terminal_title: con_core::terminal_title::TerminalTitle,
     last_cwd: Option<String>,
     last_progress: Option<TerminalProgress>,
     pending_write: Option<Vec<u8>>,
@@ -369,7 +371,7 @@ impl GhosttyView {
             initial_font_size: font_size,
             initialized: false,
             process_exit_emitted: false,
-            last_title: None,
+            terminal_title: Default::default(),
             last_cwd: None,
             last_progress: None,
             pending_write: None,
@@ -491,7 +493,7 @@ impl GhosttyView {
         self.initialized = false;
         self.startup_error = None;
         self.process_exit_emitted = false;
-        self.last_title = None;
+        self.terminal_title = Default::default();
         self.pending_write = None;
         self.snapshot = None;
         self.row_cache.clear();
@@ -583,10 +585,9 @@ impl GhosttyView {
         }
 
         let title = terminal.title();
-        if title != self.last_title {
-            self.last_title = title.clone();
+        if let Some(content_changed) = self.terminal_title.update(title) {
             changed = true;
-            cx.emit(GhosttyTitleChanged(title));
+            cx.emit(GhosttyTitleChanged { content_changed });
         }
 
         let cwd = terminal.current_dir();
@@ -642,10 +643,9 @@ impl GhosttyView {
             }
 
             let title = terminal.title();
-            if title != self.last_title {
-                self.last_title = title.clone();
+            if let Some(content_changed) = self.terminal_title.update(title) {
                 changed = true;
-                cx.emit(GhosttyTitleChanged(title));
+                cx.emit(GhosttyTitleChanged { content_changed });
             }
 
             let cwd = terminal.current_dir();
@@ -709,7 +709,7 @@ impl GhosttyView {
                 if let Some(pending) = self.pending_write.take() {
                     terminal.write_to_pty(&pending);
                 }
-                self.last_title = terminal.title();
+                self.terminal_title.update(terminal.title());
                 let _ = self.refresh_snapshot();
                 cx.notify();
                 true

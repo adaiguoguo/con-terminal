@@ -411,6 +411,7 @@ impl ConWorkspace {
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        self.sync_sidebar(cx);
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
             true,

@@ -119,8 +119,9 @@ fn perf_trace_enabled() -> bool {
 }
 
 /// Emitted when the terminal title changes.
-#[allow(dead_code)]
-pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyTitleChanged {
+    pub content_changed: bool,
+}
 
 pub struct GhosttyBell;
 
@@ -279,7 +280,7 @@ pub struct GhosttyView {
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
-    last_title: Option<String>,
+    pub(crate) terminal_title: con_core::terminal_title::TerminalTitle,
     last_cwd: Option<String>,
     last_progress: Option<TerminalProgress>,
     /// Data queued for the PTY before the surface was created.
@@ -369,7 +370,7 @@ impl GhosttyView {
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
-            last_title: None,
+            terminal_title: Default::default(),
             last_cwd: cwd,
             last_progress: None,
             pending_write: None,
@@ -838,10 +839,9 @@ impl GhosttyView {
         }
 
         let title = terminal.title();
-        if title != self.last_title {
-            self.last_title = title.clone();
+        if let Some(content_changed) = self.terminal_title.update(title) {
             changed = true;
-            cx.emit(GhosttyTitleChanged(title));
+            cx.emit(GhosttyTitleChanged { content_changed });
         }
 
         let cwd = terminal.current_dir().or_else(|| self.initial_cwd.clone());
@@ -1136,7 +1136,7 @@ impl GhosttyView {
         self.initialized = false;
         self.awaiting_first_layout_visibility = false;
         self.last_bounds = None;
-        self.last_title = None;
+        self.terminal_title = Default::default();
         self.last_progress = None;
         self.pending_write = None;
         self.restored_screen_text = None;

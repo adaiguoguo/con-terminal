@@ -403,7 +403,7 @@ impl ConWorkspace {
                     if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                         (
                             self.effective_remote_host_for_tab(index, terminal, cx),
-                            terminal.title(cx),
+                            terminal.title_name(cx),
                             terminal.current_dir(cx),
                         )
                     } else {
@@ -778,21 +778,21 @@ impl ConWorkspace {
                         .min_w(px(0.0))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
-                        .child(
-                            svg()
-                                .path(tab_icon)
-                                .size(mono_icon_px(theme, 12.5))
-                                .flex_shrink_0()
-                                .text_color(if is_active {
-                                    tab_color
-                                        .map(|color| {
-                                            crate::tab_colors::tab_accent_color_hsla(color, cx)
-                                        })
-                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
-                                } else {
-                                    theme.muted_foreground.opacity(0.38)
-                                }),
-                        )
+                        .child(crate::sidebar::tab_status_icon(
+                            tab_icon,
+                            tab_title_indicator(&tab.pane_tree, cx),
+                            mono_icon_px(theme, 12.5),
+                            if is_active {
+                                tab_color
+                                    .map(|color| {
+                                        crate::tab_colors::tab_accent_color_hsla(color, cx)
+                                    })
+                                    .unwrap_or_else(|| theme.foreground.opacity(0.68))
+                            } else {
+                                theme.muted_foreground.opacity(0.38)
+                            },
+                            theme,
+                        ))
                         .child(
                             div()
                                 .min_w_0()

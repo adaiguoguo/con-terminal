@@ -274,6 +274,8 @@ impl ConWorkspace {
                         is_ssh: presentation.is_ssh,
                         needs_attention: false,
                         progress: None,
+                        title_indicator: None,
+                        terminal_titles: Vec::new(),
                         icon: presentation.icon,
                         has_user_label: tab.user_label.is_some(),
                         pane_count,

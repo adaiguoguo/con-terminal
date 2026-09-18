@@ -17,6 +17,7 @@
 use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
 use crate::ui_scale::ui_icon_px;
+use con_core::terminal_title::TitleIndicator;
 use con_ghostty::TerminalProgress;
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
@@ -74,6 +75,8 @@ pub struct SessionEntry {
     pub is_ssh: bool,
     pub needs_attention: bool,
     pub progress: Option<TerminalProgress>,
+    pub title_indicator: Option<TitleIndicator>,
+    pub terminal_titles: Vec<String>,
     pub icon: &'static str,
     pub has_user_label: bool,
     /// How many panes the tab contains (split count). Surfaced in
@@ -651,6 +654,17 @@ impl SessionSidebar {
         cx.notify();
     }
 
+    pub fn update_session(&mut self, entry: SessionEntry, cx: &mut Context<Self>) {
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == entry.id)
+        {
+            *session = entry;
+            cx.notify();
+        }
+    }
+
     fn begin_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.sessions.len() {
             return;
@@ -1071,17 +1085,17 @@ impl SessionSidebar {
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
                 })
-                .child(
-                    svg()
-                        .path(session.icon)
-                        .size(ui_icon_px(theme, 16.0))
-                        .flex_shrink_0()
-                        .text_color(if is_active {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground.opacity(0.78)
-                        }),
-                );
+                .child(tab_status_icon(
+                    session.icon,
+                    session.title_indicator,
+                    ui_icon_px(theme, 16.0),
+                    if is_active {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground.opacity(0.78)
+                    },
+                    theme,
+                ));
 
             if session.needs_attention && !is_active {
                 pill = pill.child(
@@ -1163,11 +1177,12 @@ impl SessionSidebar {
         // Rendered card heights (px) — keep in sync with the layout below:
         //   no subtitle: py 8*2 + name 16 + meta (mt 2 + 13) = 47
         //   subtitle:    py 8*2 + name 16 + sub (mt 2 + 14) + meta (mt 4 + 13) = 65
-        let card_height = if session.subtitle.is_some() {
+        let card_height = (if session.subtitle.is_some() {
             65.0
         } else {
             47.0
-        };
+        } + session.terminal_titles.len() as f32 * 16.0)
+            .min(240.0);
         let min_top = self.leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT + 8.0;
         let top = hover_card_top_for_cursor(
             f32::from(cursor.y),
@@ -1203,6 +1218,18 @@ impl SessionSidebar {
                     .font_family(mono_font)
                     .truncate()
                     .child(sub.clone()),
+            );
+        }
+
+        for title in &session.terminal_titles {
+            card_inner = card_inner.child(
+                div()
+                    .text_size(px(11.0))
+                    .line_height(px(16.0))
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.foreground)
+                    .truncate()
+                    .child(title.clone()),
             );
         }
 
@@ -1245,7 +1272,12 @@ impl SessionSidebar {
             .rounded(px(8.0))
             .bg(bg)
             .occlude()
-            .child(card_inner)
+            .child(
+                card_inner
+                    .id("tab-title-details")
+                    .max_h(px(240.0))
+                    .overflow_y_scroll(),
+            )
             .child(
                 div()
                     .absolute()
@@ -1448,6 +1480,8 @@ impl SessionSidebar {
                 is_ssh: self.sessions[i].is_ssh,
                 needs_attention: self.sessions[i].needs_attention,
                 progress: self.sessions[i].progress,
+                title_indicator: self.sessions[i].title_indicator,
+                terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
                 pane_count: self.sessions[i].pane_count,
@@ -1651,16 +1685,17 @@ impl SessionSidebar {
         };
         let tab_bounds = self.tab_bounds.clone();
 
-        let mut icon_stack = div().relative().flex_shrink_0().child(
-            svg()
-                .path(session.icon)
-                .size(ui_icon_px(theme, 15.0))
-                .text_color(if is_active {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground.opacity(0.78)
-                }),
-        );
+        let mut icon_stack = div().relative().flex_shrink_0().child(tab_status_icon(
+            session.icon,
+            session.title_indicator,
+            ui_icon_px(theme, 15.0),
+            if is_active {
+                theme.foreground
+            } else {
+                theme.muted_foreground.opacity(0.78)
+            },
+            theme,
+        ));
         if session.needs_attention && !is_active {
             icon_stack = icon_stack.child(
                 div()
@@ -1939,6 +1974,44 @@ fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
         bar.top(px(-2.0))
     } else {
         bar.bottom(px(-2.0))
+    }
+}
+
+/// A source-owned frame shares the icon's fixed slot; there is deliberately no
+/// host animation clock. Paused/stale applications must not keep spinning here.
+pub(crate) fn tab_status_icon(
+    icon: &'static str,
+    indicator: Option<TitleIndicator>,
+    size: Pixels,
+    color: Hsla,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    if let Some(indicator) = indicator {
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(size)
+            .flex_shrink_0()
+            // Status glyphs are icons, not terminal text. Some user fonts map
+            // Braille to empty outlines, which also prevents font fallback.
+            .font_family("Ioskeley Mono")
+            .text_size(size)
+            .line_height(size)
+            .text_color(if matches!(indicator, TitleIndicator::Attention(_)) {
+                theme.warning
+            } else {
+                theme.foreground
+            })
+            .child(indicator.frame().to_string())
+            .into_any_element()
+    } else {
+        svg()
+            .path(icon)
+            .size(size)
+            .flex_shrink_0()
+            .text_color(color)
+            .into_any_element()
     }
 }
 
@@ -2380,6 +2453,52 @@ mod tests {
         vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
+
+    #[gpui::test]
+    fn title_status_font_is_independent_of_user_fonts(_cx: &mut gpui::TestAppContext) {
+        use gpui::Styled;
+
+        let mut theme = gpui_component::Theme::default();
+        theme.mono_font_family = "BerkeleyMono Nerd Font Mono".into();
+        theme.font_family = "Other UI Font".into();
+        for indicator in [
+            super::TitleIndicator::Activity('⠋'),
+            super::TitleIndicator::Activity('✽'),
+            super::TitleIndicator::Attention('!'),
+        ] {
+            let mut element = super::tab_status_icon(
+                "phosphor/terminal.svg",
+                Some(indicator),
+                px(16.0),
+                theme.foreground,
+                &theme,
+            );
+            let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
+            assert_eq!(
+                text.font_family.as_ref().map(|font| font.as_ref()),
+                Some("Ioskeley Mono")
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_font_has_visible_title_status_glyphs() {
+        let face = ttf_parser::Face::parse(
+            include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf"),
+            0,
+        )
+        .unwrap();
+        for frame in ('\u{2801}'..='\u{28ff}').chain("·✢✳✶✻✽!.".chars()) {
+            let glyph = face.glyph_index(frame).expect("status glyph must exist");
+            let bounds = face
+                .glyph_bounding_box(glyph)
+                .expect("status glyph must have an outline");
+            assert!(
+                bounds.width() > 0 && bounds.height() > 0,
+                "empty glyph: {frame}"
+            );
+        }
+    }
 
     #[test]
     fn vertical_slot_from_bounds_uses_row_midpoints() {

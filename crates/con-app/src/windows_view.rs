@@ -107,8 +107,9 @@ fn mouse_mods_from(modifiers: &Modifiers) -> MouseEventMods {
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
-#[allow(dead_code)]
-pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyTitleChanged {
+    pub content_changed: bool,
+}
 pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
@@ -140,7 +141,7 @@ pub struct GhosttyView {
     init_failed: bool,
     /// Emit `GhosttyProcessExited` exactly once on shell death.
     process_exit_emitted: bool,
-    last_title: Option<String>,
+    pub(crate) terminal_title: con_core::terminal_title::TerminalTitle,
     last_cwd: Option<String>,
     last_progress: Option<TerminalProgress>,
     /// Pane bounds in logical window pixels, captured during prepaint.
@@ -261,7 +262,7 @@ impl GhosttyView {
             initialized: false,
             init_failed: false,
             process_exit_emitted: false,
-            last_title: None,
+            terminal_title: Default::default(),
             last_cwd: None,
             last_progress: None,
             pane_bounds: None,
@@ -478,10 +479,9 @@ impl GhosttyView {
         }
 
         let title = terminal.title();
-        if title != self.last_title {
-            self.last_title = title.clone();
+        if let Some(content_changed) = self.terminal_title.update(title) {
             changed = true;
-            cx.emit(GhosttyTitleChanged(title));
+            cx.emit(GhosttyTitleChanged { content_changed });
         }
 
         let cwd = terminal.current_dir();
@@ -561,7 +561,8 @@ impl GhosttyView {
                 }
                 self.restored_screen_text = None;
                 self.initialized = true;
-                self.last_title = self.terminal.as_ref().and_then(|t| t.title());
+                self.terminal_title
+                    .update(self.terminal.as_ref().and_then(|t| t.title()));
                 self.last_cwd = self.terminal.as_ref().and_then(|t| t.current_dir());
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_dpi = dpi;

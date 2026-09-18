@@ -657,6 +657,7 @@ impl Render for ConWorkspace {
                             target.direction,
                             target.placement,
                         );
+                        this.sync_sidebar(cx);
                         cx.notify();
                         return;
                     }
