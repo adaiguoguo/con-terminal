@@ -1993,7 +1993,9 @@ pub(crate) fn tab_status_icon(
             .justify_center()
             .size(size)
             .flex_shrink_0()
-            .font_family(theme.mono_font_family.clone())
+            // Status glyphs are icons, not terminal text. Some user fonts map
+            // Braille to empty outlines, which also prevents font fallback.
+            .font_family("Ioskeley Mono")
             .text_size(size)
             .line_height(size)
             .text_color(if matches!(indicator, TitleIndicator::Attention(_)) {
@@ -2451,6 +2453,52 @@ mod tests {
         vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
+
+    #[gpui::test]
+    fn title_status_font_is_independent_of_user_fonts(_cx: &mut gpui::TestAppContext) {
+        use gpui::Styled;
+
+        let mut theme = gpui_component::Theme::default();
+        theme.mono_font_family = "BerkeleyMono Nerd Font Mono".into();
+        theme.font_family = "Other UI Font".into();
+        for indicator in [
+            super::TitleIndicator::Activity('⠋'),
+            super::TitleIndicator::Activity('✽'),
+            super::TitleIndicator::Attention('!'),
+        ] {
+            let mut element = super::tab_status_icon(
+                "phosphor/terminal.svg",
+                Some(indicator),
+                px(16.0),
+                theme.foreground,
+                &theme,
+            );
+            let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
+            assert_eq!(
+                text.font_family.as_ref().map(|font| font.as_ref()),
+                Some("Ioskeley Mono")
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_font_has_visible_title_status_glyphs() {
+        let face = ttf_parser::Face::parse(
+            include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf"),
+            0,
+        )
+        .unwrap();
+        for frame in ('\u{2801}'..='\u{28ff}').chain("·✢✳✶✻✽!.".chars()) {
+            let glyph = face.glyph_index(frame).expect("status glyph must exist");
+            let bounds = face
+                .glyph_bounding_box(glyph)
+                .expect("status glyph must have an outline");
+            assert!(
+                bounds.width() > 0 && bounds.height() > 0,
+                "empty glyph: {frame}"
+            );
+        }
+    }
 
     #[test]
     fn vertical_slot_from_bounds_uses_row_midpoints() {

@@ -43,3 +43,22 @@ The tests include Unicode boundaries, recognition, completion, attention and
 10,000 frames with one naming-context change. UI validation should use real
 OSC writes through a live PTY in collapsed, expanded and horizontal layouts,
 including user labels and hidden surfaces, rather than only parser tests.
+
+## Follow-up: blank status glyphs with a custom font
+
+The first implementation inherited the terminal font for status glyphs. A
+BerkeleyMono Nerd Font Mono installation mapped all 255 nonblank Braille
+characters to empty outlines. CoreText considered the glyphs present, so
+fallback did not help: replacing the SVG icon with a frame produced a blank
+slot. Default-font UI checks missed this configuration.
+
+Status glyphs now use the already embedded Ioskeley Mono font, independently
+of terminal and UI font preferences. The shared renderer covers collapsed,
+expanded and horizontal tabs. No extra font setting, runtime glyph probing
+or animation timer is needed. Native Ghostty likewise separates its title
+font from its terminal font.
+
+A regression test inspects the actual status element with custom terminal
+and UI fonts; it fails with font inheritance and passes with the fixed font.
+A second test checks nonempty outlines for every supported status character
+in the bundled font, rather than accepting a character-map entry alone.
