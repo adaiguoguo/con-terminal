@@ -1158,6 +1158,7 @@ fn has_open_windows(cx: &App) -> bool {
 fn open_window_from_disk(cx: &mut App) {
     let config = con_core::Config::load().unwrap_or_default();
     app_icon::apply_persisted(&config.appearance.app_icon);
+    app_icon::sync_saved_file_icon(cx);
     open_con_window(config, fresh_window_session_with_history(), false, cx);
 }
 
@@ -2648,6 +2649,7 @@ fn main() {
 
         // Set dock icon for development (`cargo run`) and any saved selection.
         app_icon::apply_persisted(&config.appearance.app_icon);
+        app_icon::sync_saved_file_icon(cx);
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);

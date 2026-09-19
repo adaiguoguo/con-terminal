@@ -1,10 +1,12 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use con_core::config::{app_icon_asset, sanitize_app_icon, DEFAULT_APP_ICON};
+use con_core::config::{DEFAULT_APP_ICON, app_icon_asset, sanitize_app_icon};
 
 static APPLIED_APP_ICON: Mutex<String> = Mutex::new(String::new());
 static SAVED_APP_ICON: Mutex<String> = Mutex::new(String::new());
+#[cfg(any(target_os = "macos", test))]
+static SYNCED_FILE_ICON: Mutex<String> = Mutex::new(String::new());
 static NEXT_PREVIEW_OWNER: AtomicU64 = AtomicU64::new(1);
 static PREVIEW_STACK: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
 
@@ -35,10 +37,41 @@ pub fn saved_id() -> String {
     mutex_id(&SAVED_APP_ICON)
 }
 
+/// Called only after config reaches disk, or when loading persisted config.
+/// File icons must never follow an unsaved Dock preview.
 pub fn remember_saved(id: &str) {
     let id = sanitize_app_icon(id);
     if let Ok(mut saved) = SAVED_APP_ICON.lock() {
         saved.clone_from(&id);
+    }
+}
+
+/// Sync the installed icon without blocking the UI on IconServices I/O.
+/// Call after recording a successfully saved (or loaded) configuration.
+pub fn sync_saved_file_icon(_cx: &gpui::App) {
+    #[cfg(target_os = "macos")]
+    _cx.background_executor()
+        .spawn(async { sync_file_icon(set_bundle_icon) })
+        .detach();
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn sync_file_icon(apply: impl FnOnce(&str) -> anyhow::Result<()>) {
+    // Separate from APPLIED_APP_ICON: saving the already-previewed image
+    // still needs a file update. Serialize NSWorkspace calls and cache only
+    // successes, so an unwritable bundle can be retried on the next save.
+    let Ok(mut synced) = SYNCED_FILE_ICON.lock() else {
+        return;
+    };
+    // Read after acquiring the write lock, not when scheduling the task:
+    // out-of-order background tasks must never restore an older selection.
+    let id = saved_id();
+    if *synced == id {
+        return;
+    }
+    match apply(&id) {
+        Ok(()) => *synced = id,
+        Err(err) => log::warn!("could not update installed app icon: {err:#}"),
     }
 }
 
@@ -125,9 +158,8 @@ pub fn take_for_save(panel_id: &str, snapshot_id: Option<&str>) -> String {
     }
 }
 
-/// Apply the selected app icon. On macOS this updates the Dock and Cmd-Tab
-/// image for the running process. Finder / Launchpad still use the bundled
-/// `.app` icon until alternate bundle icons are added.
+/// Apply the running Dock / Cmd-Tab image, including unsaved previews.
+/// The installed `.app` icon is synchronized separately after saving.
 pub fn apply_app_icon(id: &str) {
     let id = sanitize_app_icon(id);
     if let Ok(mut current) = APPLIED_APP_ICON.lock() {
@@ -177,6 +209,62 @@ fn set_application_icon_image(png: &[u8]) {
 #[cfg(not(target_os = "macos"))]
 fn set_application_icon_image(_png: &[u8]) {}
 
+#[cfg(target_os = "macos")]
+fn set_bundle_icon(id: &str) -> anyhow::Result<()> {
+    use cocoa::base::id as ObjcId;
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    objc::rc::autoreleasepool(|| unsafe {
+        let bundle: ObjcId = msg_send![class!(NSBundle), mainBundle];
+        let path: ObjcId = msg_send![bundle, bundlePath];
+        let path = std::ffi::CStr::from_ptr(path.UTF8String()).to_str()?;
+        let path = std::path::Path::new(path);
+        // `cargo run` is not an application bundle. Never customize the
+        // containing directory or search for another installed copy.
+        if path.extension().is_some_and(|ext| ext == "app") {
+            set_file_icon(path, id)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn set_file_icon(path: &std::path::Path, id: &str) -> anyhow::Result<()> {
+    use cocoa::appkit::NSImage;
+    use cocoa::base::{BOOL, YES, id as ObjcId, nil};
+    use cocoa::foundation::{NSData, NSString};
+    use objc::rc::{StrongPtr, autoreleasepool};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    autoreleasepool(|| unsafe {
+        let path = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid bundle path"))?;
+        let path = StrongPtr::new(NSString::alloc(nil).init_str(path));
+        let image = if id == DEFAULT_APP_ICON {
+            // nil removes the file's custom icon, revealing the signed
+            // bundle's original resource without changing its contents.
+            StrongPtr::new(nil)
+        } else {
+            let asset = app_icon_asset(id);
+            let png = crate::assets::png_bytes(asset)
+                .ok_or_else(|| anyhow::anyhow!("app icon asset missing: {asset}"))?;
+            let data = NSData::dataWithBytes_length_(nil, png.as_ptr().cast(), png.len() as u64);
+            let image = StrongPtr::new(NSImage::initWithData_(NSImage::alloc(nil), data));
+            anyhow::ensure!(*image != nil, "invalid app icon image: {asset}");
+            image
+        };
+        let workspace: ObjcId = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let success: BOOL = msg_send![workspace, setIcon: *image forFile: *path options: 0_u64];
+        anyhow::ensure!(
+            success == YES,
+            "NSWorkspace rejected the app icon (bundle must be writable)"
+        );
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,8 +275,118 @@ mod tests {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         *APPLIED_APP_ICON.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
         *SAVED_APP_ICON.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
-        PREVIEW_STACK.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *SYNCED_FILE_ICON.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        PREVIEW_STACK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         guard
+    }
+
+    #[test]
+    fn file_icon_tracks_saved_choices_not_dock_previews() {
+        let _guard = reset();
+        apply_persisted("raccoon-a1");
+        sync_file_icon(|id| {
+            assert_eq!(id, "raccoon-a1");
+            Ok(())
+        });
+        assert_eq!(*SYNCED_FILE_ICON.lock().unwrap(), "raccoon-a1");
+
+        apply_preview(1, "raccoon-b1");
+        sync_file_icon(|_| panic!("preview must not change the file icon"));
+        assert_eq!(*SYNCED_FILE_ICON.lock().unwrap(), "raccoon-a1");
+        restore_saved_if_owner(1);
+        assert_eq!(*SYNCED_FILE_ICON.lock().unwrap(), "raccoon-a1");
+
+        apply_preview(2, "raccoon-c1");
+        remember_saved("raccoon-c1");
+        sync_file_icon(|id| {
+            assert_eq!(id, "raccoon-c1");
+            Ok(())
+        });
+        assert_eq!(*SYNCED_FILE_ICON.lock().unwrap(), "raccoon-c1");
+        remember_saved("default");
+        sync_file_icon(|id| {
+            assert_eq!(id, "default");
+            Ok(())
+        });
+        assert_eq!(*SYNCED_FILE_ICON.lock().unwrap(), "default");
+    }
+
+    #[test]
+    fn file_icon_retries_failures_but_skips_successful_duplicates() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        sync_file_icon(|_| anyhow::bail!("read-only bundle"));
+        assert!(SYNCED_FILE_ICON.lock().unwrap().is_empty());
+        let mut calls = 0;
+        sync_file_icon(|_| {
+            calls += 1;
+            Ok(())
+        });
+        sync_file_icon(|_| panic!("duplicate file write"));
+        assert_eq!(calls, 1);
+        remember_saved("default");
+        sync_file_icon(|_| {
+            calls += 1;
+            Ok(())
+        });
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn queued_sync_reads_latest_saved_icon_not_preview_or_old_save() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        remember_saved("raccoon-b1");
+        apply_preview(1, "raccoon-c1");
+        sync_file_icon(|id| {
+            assert_eq!(id, "raccoon-b1");
+            Ok(())
+        });
+        sync_file_icon(|_| panic!("older queued task must not write again"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_file_icon_sets_and_clears_custom_icon_flag() {
+        let _guard = reset();
+        struct TestBundle(std::path::PathBuf);
+        impl Drop for TestBundle {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let bundle = TestBundle(std::env::temp_dir().join(format!(
+            "con-icon-{}-{}.app",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )));
+        std::fs::create_dir(&bundle.0).unwrap();
+        let has_custom_icon = || {
+            let info = std::process::Command::new("/usr/bin/xattr")
+                .args(["-px", "com.apple.FinderInfo"])
+                .arg(&bundle.0)
+                .output()
+                .unwrap();
+            // Finder flags are big-endian at offset 8; kHasCustomIcon = 0x0400.
+            info.status.success()
+                && String::from_utf8(info.stdout)
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(8)
+                    .is_some_and(|byte| u8::from_str_radix(byte, 16).unwrap() & 4 != 0)
+        };
+        assert!(!has_custom_icon());
+        set_file_icon(&bundle.0, "raccoon-suit-a6").unwrap();
+        assert!(has_custom_icon());
+        set_file_icon(&bundle.0, DEFAULT_APP_ICON).unwrap();
+        assert!(!has_custom_icon());
+        assert!(set_file_icon(&bundle.0.join("missing.app"), "raccoon-a1").is_err());
     }
 
     #[test]

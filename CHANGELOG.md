@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.100`
+
+### Fixed
+
+**macOS**
+
+- Saved alternate app icons now appear consistently in Finder and system
+  search, while unsaved previews remain limited to the Dock and Cmd-Tab.
+  Choosing Classic restores the bundled icon. _(PR
+  [#359](https://github.com/nowledge-co/con-terminal/pull/359) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
 ## `v0.1.0-beta.99` - 2026-09-18
 
 ### Added
