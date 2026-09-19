@@ -803,6 +803,8 @@ impl ConWorkspace {
                 user_label: None,
                 ai_label: None,
                 ai_icon: None,
+                agent_cli: None,
+                agent_cli_detection: AgentCliDetectionState::default(),
                 color: None,
                 summary_id,
                 summary_epoch: 0,
