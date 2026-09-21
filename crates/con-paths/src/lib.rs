@@ -11,6 +11,12 @@ pub const APP_DIR_NAME: &str = "con-terminal";
 #[cfg(not(target_os = "windows"))]
 pub const APP_DIR_NAME: &str = "con";
 
+// Windows reserves CON even when followed by an extension.
+#[cfg(target_os = "windows")]
+pub const CONFIG_FILE_NAME: &str = "con-terminal.conf";
+#[cfg(not(target_os = "windows"))]
+pub const CONFIG_FILE_NAME: &str = "con.conf";
+
 pub fn app_config_dir() -> PathBuf {
     dirs::config_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
@@ -33,6 +39,11 @@ pub fn app_cache_dir() -> PathBuf {
 }
 
 pub fn config_file() -> PathBuf {
+    app_config_dir().join(CONFIG_FILE_NAME)
+}
+
+/// The former TOML configuration. It is only used as a migration source.
+pub fn legacy_config_file() -> PathBuf {
     app_config_dir().join("config.toml")
 }
 
@@ -94,14 +105,20 @@ pub fn host_command(program: &str) -> std::process::Command {
 mod tests {
     use super::{
         APP_DIR_NAME, app_config_dir, app_data_dir, config_file, default_global_skills_path,
-        host_command, is_flatpak, user_themes_dir,
+        host_command, is_flatpak, legacy_config_file, user_themes_dir,
     };
 
     #[test]
     fn app_paths_use_platform_safe_dir_name() {
         assert!(app_config_dir().ends_with(APP_DIR_NAME));
         assert!(app_data_dir().ends_with(APP_DIR_NAME));
-        assert!(config_file().ends_with(std::path::Path::new(APP_DIR_NAME).join("config.toml")));
+        assert!(
+            config_file()
+                .ends_with(std::path::Path::new(APP_DIR_NAME).join(super::CONFIG_FILE_NAME))
+        );
+        assert!(
+            legacy_config_file().ends_with(std::path::Path::new(APP_DIR_NAME).join("config.toml"))
+        );
         assert!(user_themes_dir().ends_with(std::path::Path::new(APP_DIR_NAME).join("themes")));
     }
 

@@ -1,8 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use con_agent::{AgentConfig, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+pub mod ghostty;
+pub mod transfer;
 
 pub const MIN_UI_FONT_SIZE: f32 = 12.0;
 pub const MAX_UI_FONT_SIZE: f32 = 24.0;
@@ -1018,7 +1021,7 @@ impl NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub terminal: TerminalConfig,
@@ -1027,6 +1030,28 @@ pub struct Config {
     pub keybindings: KeybindingConfig,
     pub skills: SkillsConfig,
     pub network: NetworkConfig,
+    /// Authored source/provenance used for lossless, collision-safe saves.
+    #[serde(skip)]
+    source: std::sync::Mutex<ghostty::SourceState>,
+}
+
+impl Clone for Config {
+    fn clone(&self) -> Self {
+        Self {
+            terminal: self.terminal.clone(),
+            appearance: self.appearance.clone(),
+            agent: self.agent.clone(),
+            keybindings: self.keybindings.clone(),
+            skills: self.skills.clone(),
+            network: self.network.clone(),
+            source: std::sync::Mutex::new(
+                self.source
+                    .lock()
+                    .expect("config source mutex poisoned")
+                    .clone(),
+            ),
+        }
+    }
 }
 
 /// Configuration for skill discovery paths.
@@ -1121,23 +1146,117 @@ impl Config {
     }
 
     pub fn load() -> Result<Self> {
-        let config_path = Self::config_path();
-        let mut config = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)?;
-            let document: toml::Value = toml::from_str(&content)?;
-            let provider_provenance_is_present =
-                config_declares_agent_provider_provenance(&document);
-            let mut config: Config = document.try_into()?;
-            config.agent.migrate_legacy();
-            migrate_agent_provider_provenance(&mut config, provider_provenance_is_present);
-            config
-        } else {
-            Config::default()
-        };
-
-        config.normalize();
+        let mut config =
+            Self::load_from_paths(&Self::config_path(), &con_paths::legacy_config_file())?;
         config.apply_zero_touch_chatgpt_default();
         Ok(config)
+    }
+
+    /// Pure load/parse entry point. It never performs credential discovery.
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !config_path_exists(path)? {
+            let config = Self::default();
+            config
+                .source
+                .lock()
+                .expect("config source mutex poisoned")
+                .path = Some(path.to_owned());
+            return Ok(config);
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read configuration `{}`", path.display()))?;
+        ghostty::parse(&content, Some(path.to_owned()))
+    }
+
+    /// Parse in-memory Ghostty syntax without resolving includes or auth state.
+    pub fn parse_ghostty(source: &str) -> Result<Self> {
+        ghostty::parse(source, None)
+    }
+
+    /// Load the primary file, or migrate an older sibling without modifying it.
+    pub fn load_from_paths(path: impl AsRef<Path>, legacy: impl AsRef<Path>) -> Result<Self> {
+        let (path, legacy) = (path.as_ref(), legacy.as_ref());
+        if config_path_exists(path)? {
+            return Self::load_from_path(path);
+        }
+        let previous = path.with_file_name("config.ghostty");
+        if previous != path && config_path_exists(&previous)? {
+            let content = std::fs::read_to_string(&previous)
+                .with_context(|| format!("cannot read configuration `{}`", previous.display()))?;
+            // The directory does not change, so relative includes and resources
+            // keep their meaning. Preserve comments and native syntax verbatim.
+            ghostty::parse(&content, Some(path.to_owned()))?;
+            write_private_atomic_no_clobber(path, content.as_bytes())?;
+            return Self::load_from_path(path);
+        }
+        if !config_path_exists(legacy)? {
+            return Self::load_from_path(path);
+        }
+        let content = std::fs::read_to_string(legacy)
+            .with_context(|| format!("cannot read configuration `{}`", legacy.display()))?;
+        let document: toml::Value = toml::from_str(&content).map_err(|_| {
+            anyhow::anyhow!("invalid legacy TOML configuration; original file was not modified")
+        })?;
+        let provenance = config_declares_agent_provider_provenance(&document);
+        let mut config: Config = document.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "invalid legacy configuration value type; original file was not modified"
+            )
+        })?;
+        config.agent.migrate_legacy();
+        migrate_agent_provider_provenance(&mut config, provenance);
+        config.normalize();
+        config
+            .source
+            .lock()
+            .expect("config source mutex poisoned")
+            .path = Some(path.to_owned());
+        let rendered = ghostty::render(&config)?;
+        // Validate the exact generated representation before publishing it.
+        ghostty::parse(&rendered, Some(path.to_owned()))?;
+        write_private_atomic_no_clobber(path, rendered.as_bytes())?;
+        ghostty::parse(&rendered, Some(path.to_owned()))
+    }
+
+    pub fn native_entries(&self) -> Vec<ghostty::NativeEntry> {
+        self.source
+            .lock()
+            .expect("config source mutex poisoned")
+            .native
+            .clone()
+    }
+
+    /// Original native Ghostty text with all `con.*` settings excluded.
+    pub fn native_config_text(&self) -> Result<String> {
+        Ok(ghostty::native_text_from_str(&ghostty::render(self)?))
+    }
+
+    pub fn base_path(&self) -> Option<PathBuf> {
+        self.source
+            .lock()
+            .expect("config source mutex poisoned")
+            .path
+            .clone()
+    }
+
+    /// Explicit keys present in the authored document.
+    pub fn authored_keys(&self) -> Vec<String> {
+        let source = self.source.lock().expect("config source mutex poisoned");
+        source
+            .source
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let (key, _) = line.split_once('=')?;
+                Some(key.trim().to_owned())
+            })
+            .collect()
+    }
+
+    /// Keys whose typed values differ from the last loaded or saved snapshot.
+    pub fn changed_keys(&self) -> Result<Vec<String>> {
+        ghostty::changed_keys(self)
     }
 
     /// Zero-touch ChatGPT Subscription sign-in applied on every config load.
@@ -1167,6 +1286,18 @@ impl Config {
                 "[config] Recomputed automatic agent provider as {provider} from credential readiness"
             );
             self.agent.provider = provider;
+            if !self.agent.provider_is_explicit {
+                if let Some(authored) = self
+                    .source
+                    .lock()
+                    .expect("config source mutex poisoned")
+                    .authored
+                    .as_mut()
+                {
+                    authored["agent"]["provider"] = serde_json::to_value(&self.agent.provider)
+                        .expect("provider serialization cannot fail");
+                }
+            }
         }
     }
 
@@ -1175,10 +1306,87 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path();
-        let content = toml::to_string_pretty(self)?;
-        write_private_atomic(&path, content.as_bytes())
+        self.save_to_path(Self::config_path())
     }
+
+    pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            anyhow::bail!(
+                "TOML configuration is read-only; save as {}",
+                con_paths::CONFIG_FILE_NAME
+            );
+        }
+        let rendered = ghostty::render(self)?;
+        // Validate before touching the user's file.
+        let reparsed = ghostty::parse(&rendered, Some(path.to_owned()))?;
+        {
+            let source = self.source.lock().expect("config source mutex poisoned");
+            if source.path.as_deref() == Some(path) {
+                if path.exists() {
+                    let disk = std::fs::read_to_string(path)?;
+                    if disk != source.source && disk != rendered {
+                        anyhow::bail!("configuration changed on disk; reload before saving");
+                    }
+                } else if !source.source.is_empty() {
+                    anyhow::bail!("configuration was removed on disk; reload before saving");
+                }
+            } else if path.exists() {
+                anyhow::bail!("destination already exists; load it before saving");
+            }
+        }
+        write_private_atomic(path, rendered.as_bytes())?;
+        let new_source = reparsed
+            .source
+            .lock()
+            .expect("config source mutex poisoned")
+            .clone();
+        *self.source.lock().expect("config source mutex poisoned") = new_source;
+        Ok(())
+    }
+}
+
+// A dangling dotfile symlink is an existing configuration, not permission to
+// fall back to defaults or a lower-priority file. Propagate lookup errors too.
+fn config_path_exists(path: &Path) -> std::io::Result<bool> {
+    match path.symlink_metadata() {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_private_atomic_no_clobber(path: &Path, content: &[u8]) -> Result<()> {
+    if config_path_exists(path)? {
+        anyhow::bail!("configuration appeared during migration");
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let tmp = path.with_extension(format!("tmp.{}.{}.migration", std::process::id(), unique));
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> Result<()> {
+        let mut f = options.open(&tmp)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+        std::fs::hard_link(&tmp, path)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
 }
 
 fn config_declares_agent_provider_provenance(document: &toml::Value) -> bool {
@@ -1194,7 +1402,21 @@ fn migrate_agent_provider_provenance(config: &mut Config, provenance_is_present:
     }
 }
 
-fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+pub(crate) fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    // Preserve dotfile-manager links. Renaming over a symlink would replace the
+    // link itself, silently disconnecting the user's managed configuration.
+    // Resolve only an existing symlink; ordinary paths keep their authored
+    // location and dangling links remain errors.
+    let destination = match path.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() => path
+            .canonicalize()
+            .with_context(|| format!("cannot resolve configuration link `{}`", path.display()))?,
+        Ok(_) => path.to_owned(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_owned(),
+        Err(error) => return Err(error.into()),
+    };
+    let path = destination.as_path();
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1274,6 +1496,146 @@ mod tests {
         sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     };
     use con_agent::ProviderKind;
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_config_links_never_trigger_defaults_or_legacy_fallback() {
+        for name in ["config.ghostty", con_paths::CONFIG_FILE_NAME, "config.toml"] {
+            let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let target = root.join(con_paths::CONFIG_FILE_NAME);
+            let legacy = root.join("config.toml");
+            let link = root.join(name);
+            let dotfile = root.join("dotfile");
+            if name != "config.toml" {
+                std::fs::write(&legacy, "[terminal]\nfont_size = 11\n").unwrap();
+            }
+            std::os::unix::fs::symlink(&dotfile, &link).unwrap();
+            assert!(Config::load_from_paths(&target, &legacy).is_err(), "{name}");
+            assert!(!target.exists(), "must not publish a fallback for {name}");
+            if name == con_paths::CONFIG_FILE_NAME {
+                assert!(Config::load_from_path(&target).is_err());
+            }
+            // Valid dotfile symlinks still load and migrate normally.
+            std::fs::write(
+                &dotfile,
+                if name == "config.toml" {
+                    "[terminal]\nfont_size = 19\n"
+                } else {
+                    "font-size = 19\n"
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                Config::load_from_paths(&target, &legacy)
+                    .unwrap()
+                    .terminal
+                    .font_size,
+                19.0
+            );
+            assert!(
+                std::fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_config_link_preserves_the_link() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let dotfile = root.join("managed.conf");
+        let link = root.join(con_paths::CONFIG_FILE_NAME);
+        std::fs::write(&dotfile, "font-size = 12\n").unwrap();
+        std::os::unix::fs::symlink(&dotfile, &link).unwrap();
+
+        let mut config = Config::load_from_path(&link).unwrap();
+        config.terminal.font_size = 18.0;
+        config.save_to_path(&link).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(&dotfile)
+                .unwrap()
+                .contains("font-size = 18")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_preserves_native_bytes_and_prefers_native_over_toml() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join(con_paths::CONFIG_FILE_NAME);
+        let previous = root.join("config.ghostty");
+        let toml = root.join("config.toml");
+        let source =
+            "# keep comment\nfont-size = 19\nconfig-file = colors.conf\ncon.agent.max_turns = 7\n";
+        std::fs::write(&previous, source).unwrap();
+        std::fs::write(&toml, "[terminal]\nfont_size = 11\n").unwrap();
+        std::fs::write(root.join("colors.conf"), "background = 123456\n").unwrap();
+        let config = Config::load_from_paths(&target, &toml).unwrap();
+        assert_eq!(config.terminal.font_size, 19.0);
+        assert_eq!(config.agent.max_turns, 7);
+        assert_eq!(config.source.lock().unwrap().path.as_ref(), Some(&target));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), source);
+        assert_eq!(std::fs::read_to_string(&previous).unwrap(), source);
+        assert!(
+            config
+                .native_entries()
+                .iter()
+                .any(|entry| entry.key == "config-file" && entry.value == "colors.conf")
+        );
+        std::fs::write(&target, "font-size = 23\n").unwrap();
+        assert_eq!(
+            Config::load_from_paths(&target, &toml)
+                .unwrap()
+                .terminal
+                .font_size,
+            23.0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_higher_priority_config_never_falls_back() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join(con_paths::CONFIG_FILE_NAME);
+        let previous = root.join("config.ghostty");
+        let toml = root.join("config.toml");
+        std::fs::write(&toml, "[terminal]\nfont_size = 11\n").unwrap();
+        std::fs::write(&previous, "con.agent.max_turns = invalid\n").unwrap();
+        assert!(Config::load_from_paths(&target, &toml).is_err());
+        assert!(!target.exists());
+        std::fs::write(&previous, "font-size = 19\n").unwrap();
+        std::fs::write(&target, "con.agent.max_turns = invalid\n").unwrap();
+        assert!(Config::load_from_paths(&target, &toml).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "con.agent.max_turns = invalid\n"
+        );
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(&previous).unwrap();
+        assert_eq!(
+            Config::load_from_paths(&target, &toml)
+                .unwrap()
+                .terminal
+                .font_size,
+            11.0
+        );
+        assert!(toml.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn clipboard_writes_default_to_allowed_but_preserve_explicit_policy() {
