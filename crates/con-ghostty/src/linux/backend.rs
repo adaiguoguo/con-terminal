@@ -416,6 +416,17 @@ impl LinuxGhosttyTerminal {
         }
     }
 
+    pub fn render_hold_deadline(&self) -> Option<std::time::Instant> {
+        self.search_screen()?.render_hold_deadline()
+    }
+
+    pub fn expire_render_hold(&self, deadline: std::time::Instant) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(|session| session.expire_render_hold(deadline))
+    }
+
     pub fn write_to_pty(&self, data: &[u8]) {
         if let Some(session) = self.inner.lock().as_ref() {
             if let Err(err) = session.write_input(data) {

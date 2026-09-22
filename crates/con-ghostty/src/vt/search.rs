@@ -137,6 +137,22 @@ impl Search {
 
     pub(super) fn highlights(&mut self, inner: &VtInner) -> Result<Vec<Highlight>, String> {
         self.feed(inner)?;
+        self.capture_highlights(inner.terminal, inner.cols, inner.rows, false)
+    }
+
+    pub(super) fn capture_highlights(
+        &mut self,
+        terminal: GhosttyTerminal,
+        cols: u16,
+        rows: u16,
+        reconcile: bool,
+    ) -> Result<Vec<Highlight>, String> {
+        // A parser callback can run several times before the feed generation
+        // changes. Reconcile native pins against the terminal at this boundary.
+        if reconcile {
+            check(unsafe { ghostty_search_feed(self.handle) })?;
+            self.fed_generation = None;
+        }
         let mut buffer = SelectionBuffer {
             ptr: std::ptr::null_mut(),
             cap: 0,
@@ -169,7 +185,7 @@ impl Search {
         let mut origin = GhosttyGridRef::default();
         check(unsafe {
             ghostty_terminal_grid_ref(
-                inner.terminal,
+                terminal,
                 GhosttyPoint {
                     tag: GhosttyPointTag::Viewport,
                     value: GhosttyPointValue {
@@ -179,7 +195,7 @@ impl Search {
                 &mut origin,
             )
         })?;
-        let origin = screen_point(inner.terminal, &origin)?;
+        let origin = screen_point(terminal, &origin)?;
         let mut selected = GhosttySelection::default();
         let rc = unsafe {
             ghostty_search_get(
@@ -193,35 +209,31 @@ impl Search {
         }
         let selected = if rc == GHOSTTY_SUCCESS {
             Some((
-                screen_point(inner.terminal, &selected.start)?,
-                screen_point(inner.terminal, &selected.end)?,
+                screen_point(terminal, &selected.start)?,
+                screen_point(terminal, &selected.end)?,
             ))
         } else {
             None
         };
         let mut highlights = Vec::new();
         for selection in matches {
-            let start = screen_point(inner.terminal, &selection.start)?;
-            let end = screen_point(inner.terminal, &selection.end)?;
+            let start = screen_point(terminal, &selection.start)?;
+            let end = screen_point(terminal, &selection.end)?;
             let mut cell = 0;
             let mut wide = 0i32;
             check(unsafe { ghostty_grid_ref_cell(&selection.end, &mut cell) })?;
             check(unsafe {
                 ghostty_cell_get(cell, GhosttyCellData::Wide, (&mut wide as *mut i32).cast())
             })?;
-            let end_col = (end.x + u16::from(wide == 1)).min(inner.cols - 1);
+            let end_col = (end.x + u16::from(wide == 1)).min(cols - 1);
             let is_selected = selected.is_some_and(|(a, b)| {
                 a.x == start.x && a.y == start.y && b.x == end.x && b.y == end.y
             });
-            for row in start.y.max(origin.y)..=end.y.min(origin.y + u32::from(inner.rows) - 1) {
+            for row in start.y.max(origin.y)..=end.y.min(origin.y + u32::from(rows) - 1) {
                 highlights.push(Highlight {
                     row: (row - origin.y) as u16,
                     start: if row == start.y { start.x } else { 0 },
-                    end: if row == end.y {
-                        end_col
-                    } else {
-                        inner.cols - 1
-                    },
+                    end: if row == end.y { end_col } else { cols - 1 },
                     selected: is_selected,
                 });
             }
@@ -474,6 +486,32 @@ mod tests {
         assert!(matches!(waiting, Err(mpsc::RecvTimeoutError::Timeout)));
         assert!(render_available);
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), expected);
+    }
+
+    #[test]
+    fn synchronized_output_freezes_search_at_the_parser_boundary() {
+        for prefix in [b"\r\nfourth".as_slice(), b"\x1b[2;1Hbar\x1b[3;1H\r\nfourth"] {
+            let reference = VtScreen::new(12, 3, None).unwrap();
+            let held = VtScreen::new(12, 3, None).unwrap();
+            for screen in [&reference, &held] {
+                screen.feed(b"first\r\nfoo\r\nthird");
+                screen.search("foo").unwrap();
+                assert_eq!(complete(screen).total, 1);
+            }
+            // Move or invalidate the match before SET, then scroll again
+            // after it, all within one parser feed. Both stale matches and
+            // projecting against the final viewport give the wrong overlay.
+            reference.feed(prefix);
+            let expected = reference.snapshot();
+            held.feed(&[prefix, b"\x1b[?2026h\r\nfoo\r\nsixth"].concat());
+            let captured = held.snapshot();
+            assert_eq!(captured.cells, expected.cells);
+            assert_eq!(captured.scrollbar, expected.scrollbar);
+            complete(&held);
+            assert_eq!(held.snapshot().cells, expected.cells);
+            held.feed(b"\x1b[?2026l");
+            assert_ne!(held.snapshot().cells, expected.cells);
+        }
     }
 
     #[test]

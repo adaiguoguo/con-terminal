@@ -233,6 +233,15 @@ impl WindowsGhosttyTerminal {
             .map(|session| session.vt().clone())
     }
 
+    pub fn render_hold_deadline(&self) -> Option<std::time::Instant> {
+        self.search_screen()?.render_hold_deadline()
+    }
+
+    pub fn expire_render_hold(&self, deadline: std::time::Instant) -> bool {
+        self.search_screen()
+            .is_some_and(|screen| screen.expire_render_hold(deadline))
+    }
+
     pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {
         if let Some(session) = self.inner.lock().as_ref() {
             session.clear_screen_and_scrollback();

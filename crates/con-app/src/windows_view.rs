@@ -137,6 +137,7 @@ pub struct GhosttyView {
     terminal_focused: bool,
     cursor_blink: CursorBlink,
     cursor_blink_task: Option<(Instant, Task<()>)>,
+    render_hold_task: Option<(Instant, Task<()>)>,
     cursor_subscriptions: Vec<Subscription>,
     initial_cwd: Option<String>,
     restored_screen_text: Option<Vec<String>>,
@@ -252,7 +253,13 @@ impl GhosttyView {
         cx.spawn(async move |this, cx| {
             while wake_rx.next().await.is_some() {
                 pending_for_task.store(false, Ordering::Release);
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                if this
+                    .update(cx, |view, cx| {
+                        view.arm_render_hold(cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -267,6 +274,7 @@ impl GhosttyView {
             terminal_focused: false,
             cursor_blink: CursorBlink::default(),
             cursor_blink_task: None,
+            render_hold_task: None,
             cursor_subscriptions: Vec::new(),
             initial_cwd: cwd,
             restored_screen_text,
@@ -646,6 +654,33 @@ impl GhosttyView {
         log::warn!("RenderSession::{operation} failed: {error:#}");
     }
 
+    fn arm_render_hold(&mut self, cx: &mut Context<Self>) {
+        let deadline = self
+            .terminal
+            .as_ref()
+            .and_then(|terminal| terminal.render_hold_deadline());
+        if self
+            .render_hold_task
+            .as_ref()
+            .map(|(deadline, _)| *deadline)
+            == deadline
+        {
+            return;
+        }
+        self.render_hold_task = deadline.map(|deadline| {
+            let terminal = self.terminal.as_ref().unwrap().clone();
+            let task = cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(deadline.saturating_duration_since(Instant::now()))
+                    .await;
+                if terminal.expire_render_hold(deadline) {
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+            });
+            (deadline, task)
+        });
+    }
+
     /// Drives session lifecycle (init/resize/DPI) and pumps one render
     /// using the most recently observed pane bounds. Returns whether
     /// the call produced a new image, needs another frame, or made no
@@ -795,14 +830,16 @@ impl GhosttyView {
     }
 
     fn refresh_scrollbar_cache_from_session(&mut self, session: &RenderSession) {
-        let generation = session.generation();
+        let Some((generation, scrollbar)) = session.snapshot_scrollbar() else {
+            return;
+        };
         if self
             .scrollbar_cache
             .is_some_and(|cache| cache.generation == generation)
         {
             return;
         }
-        let state = session.scrollbar().filter(Self::scrollbar_visible);
+        let state = scrollbar.filter(Self::scrollbar_visible);
         self.scrollbar_cache = Some(ScrollbarCache { generation, state });
     }
 
@@ -2038,6 +2075,8 @@ impl Render for GhosttyView {
             }
             | SyncRenderResult::Unchanged => {}
         }
+
+        self.arm_render_hold(cx);
 
         if self
             .cursor_blink_task

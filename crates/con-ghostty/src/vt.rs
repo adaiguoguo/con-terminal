@@ -228,11 +228,13 @@ pub enum GhosttyTerminalOption {
     ScrollbackMaxLines = 28,
     DesktopNotification = 29,
     ProgressReport = 30,
+    Mode = 34,
     UnknownSequence = 35,
     UnknownMaxBytes = 36,
     ClipboardRead = 38,
     ClipboardWriteMaxBytes = 39,
     ResizePullScrollback = 40,
+    RenderHold = 41,
 }
 
 #[repr(C)]
@@ -1706,6 +1708,7 @@ struct SnapshotMetadata {
     generation: u64,
 }
 
+#[derive(Clone)]
 struct SnapshotEpoch {
     fallback_cols: u16,
     fallback_rows: u16,
@@ -1910,6 +1913,45 @@ struct VtCallbackState {
     progress_epoch: Instant,
     progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
+    capture: Mutex<RenderCapture>,
+}
+
+#[derive(Default)]
+struct RenderCapture {
+    deadline: Option<Instant>,
+    serial: u64,
+    generation: u64,
+    pending: Option<HeldFrame>,
+    search: Option<search::Search>,
+    kitty: KittySnapshot,
+}
+
+struct HeldFrame {
+    state: GhosttyRenderState,
+    epoch: SnapshotEpoch,
+}
+
+impl Drop for HeldFrame {
+    fn drop(&mut self) {
+        if !self.state.is_null() {
+            unsafe { ghostty_render_state_free(self.state) };
+        }
+    }
+}
+
+#[derive(Default)]
+struct KittySnapshot {
+    kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
+    kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
+    kitty_placements: Arc<[KittyPlacement]>,
+}
+
+impl Drop for KittySnapshot {
+    fn drop(&mut self) {
+        if !self.kitty_placement_iter.is_null() {
+            unsafe { ghostty_kitty_graphics_placement_iterator_free(self.kitty_placement_iter) };
+        }
+    }
 }
 
 struct MouseEncoderState {
@@ -1974,10 +2016,6 @@ struct VtInner {
     key_event: GhosttyKeyEvent,
     mouse: Option<MouseEncoderState>,
     selection_gesture: Option<SelectionGestureState>,
-    kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
-    kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
-    kitty_placements: Arc<[KittyPlacement]>,
-    kitty_snapshot_generation: u64,
     callback_state: Box<VtCallbackState>,
     title: Option<String>,
     title_reported: bool,
@@ -2086,6 +2124,7 @@ struct VtRenderState {
     selection_ranges: Vec<Option<SelectionRange>>,
     last_cursor: Cursor,
     snapshot_metadata: Option<SnapshotMetadata>,
+    capture_serial: u64,
 }
 
 impl VtRenderState {
@@ -2496,6 +2535,7 @@ impl VtScreen {
             progress_epoch: Instant::now(),
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
+            capture: Mutex::new(RenderCapture::default()),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
         let rc =
@@ -2503,6 +2543,18 @@ impl VtScreen {
         if rc != 0 {
             unsafe { ghostty_terminal_free(terminal) };
             anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
+        }
+
+        let rc = unsafe {
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::RenderHold,
+                vt_render_hold_callback as *const c_void,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(RENDER_HOLD) failed: rc={rc}");
         }
 
         if callback_state.write_pty.is_some() {
@@ -2731,6 +2783,7 @@ impl VtScreen {
             unsafe { apply_theme_to_terminal(terminal, theme) };
         }
 
+        callback_state.capture.get_mut().kitty.kitty_placement_iter = kitty_placement_iter;
         Ok(Self {
             search: Mutex::new(None),
             inner: Arc::new(Mutex::new(VtInner {
@@ -2740,10 +2793,6 @@ impl VtScreen {
                 key_event,
                 mouse: None,
                 selection_gesture: None,
-                kitty_placement_iter,
-                kitty_image_cache: HashMap::new(),
-                kitty_placements: Arc::from([]),
-                kitty_snapshot_generation: u64::MAX,
                 callback_state,
                 title: None,
                 title_reported: false,
@@ -2766,6 +2815,7 @@ impl VtScreen {
                 selection_ranges: Vec::with_capacity(rows as usize),
                 last_cursor: Cursor::default(),
                 snapshot_metadata: None,
+                capture_serial: 0,
             }),
         })
     }
@@ -2900,6 +2950,16 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    /// Scrollbar chrome must follow the extracted snapshot, not a newer live
+    /// viewport parsed behind a render hold. Return its cache key atomically.
+    pub(crate) fn snapshot_scrollbar(&self) -> Option<(u64, Option<GhosttyScrollbar>)> {
+        self.render
+            .lock()
+            .snapshot_metadata
+            .as_ref()
+            .map(|metadata| (metadata.generation, metadata.scrollbar))
     }
 
     /// Copy the OSC 8 target at a viewport cell. No grid reference escapes the
@@ -3405,9 +3465,23 @@ impl VtScreen {
     /// Feed bytes from the PTY into the parser. Non-reentrant per
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
+        // Search pins must be reconciled at the same parser boundary as cells.
+        // Transfer ownership to the callback, never reborrow VtInner through
+        // userdata or acquire the search/render/parser locks in the callback.
+        let mut search = self.search.lock();
         let mut inner = self.inner.lock();
+        {
+            let mut capture = inner.callback_state.capture.lock();
+            capture.search = search.take();
+            capture.generation = inner.generation;
+        }
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        let generation = {
+            let mut capture = inner.callback_state.capture.lock();
+            *search = capture.search.take();
+            capture.generation
+        };
         // Tracking event and output format are last-write-wins terminal flags,
         // not a pure function of the DEC mode bitset. Synchronize from the
         // terminal after every parsed output chunk so repeated DECSET/DECRST
@@ -3417,7 +3491,41 @@ impl VtScreen {
         }
         refresh_terminal_metadata(&mut inner);
         inner.output_generation = inner.output_generation.wrapping_add(1);
+        inner.generation = generation.wrapping_add(1);
+    }
+
+    pub fn render_hold_deadline(&self) -> Option<Instant> {
+        self.inner.lock().callback_state.capture.lock().deadline
+    }
+
+    /// Expire only the hold for which the host armed its timer. Manual mode
+    /// changes do not invoke RENDER_HOLD, so release our capture explicitly.
+    pub fn expire_render_hold(&self, deadline: Instant) -> bool {
+        let mut inner = self.inner.lock();
+        let mut capture = inner.callback_state.capture.lock();
+        if capture.deadline != Some(deadline) || Instant::now() < deadline {
+            return false;
+        }
+        let mode = GhosttyTerminalModeConfig {
+            mode: ghostty_mode(2026, false),
+            value: false,
+        };
+        let rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::Mode,
+                (&mode as *const GhosttyTerminalModeConfig).cast(),
+            )
+        };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("render hold timeout rc={rc}");
+            return false;
+        }
+        capture.deadline = None;
+        capture.pending = None;
+        drop(capture);
         inner.generation = inner.generation.wrapping_add(1);
+        true
     }
 
     /// Update the renderer geometry used for cell and SGR-pixel mouse formats.
@@ -3846,11 +3954,34 @@ impl VtScreen {
             self.search.try_lock()?
         };
         let mut render = self.render.lock();
-        if !render.ensure_render_state() {
-            return None;
-        }
-        let epoch = {
-            let mut inner = self.inner.lock();
+        let epoch = 'capture: {
+            let inner = self.inner.lock();
+            let mut capture = inner.callback_state.capture.lock();
+            if capture.deadline.is_some() && capture.pending.is_none() {
+                // Already adopted, or capture failed: keep the last complete
+                // frame. Defer native damage recovery until a frame is ready
+                // or the hold ends, rather than erasing this fallback now.
+                drop(capture);
+                drop(inner);
+                drop(search);
+                return render
+                    .snapshot_metadata
+                    .as_ref()
+                    .map(|metadata| metadata.snapshot(&render.scratch, &render.selection_ranges));
+            }
+            if render.capture_serial != capture.serial {
+                // begin_update consumes terminal damage, even when its result
+                // is superseded or released before the renderer adopts it.
+                render.invalidate_render_state();
+                render.capture_serial = capture.serial;
+            }
+            if let Some(mut frame) = capture.pending.take() {
+                render.render_state = std::mem::replace(&mut frame.state, std::ptr::null_mut());
+                break 'capture frame.epoch.clone();
+            }
+            if !render.ensure_render_state() {
+                return None;
+            }
             let fallback_cols = inner.cols;
             let fallback_rows = inner.rows;
 
@@ -3859,7 +3990,9 @@ impl VtScreen {
                 .as_ref()
                 .is_some_and(|metadata| metadata.generation == inner.generation)
             {
+                drop(capture);
                 drop(inner);
+                drop(search);
                 let metadata = render
                     .snapshot_metadata
                     .as_ref()
@@ -3881,7 +4014,7 @@ impl VtScreen {
                 return None;
             }
 
-            let kitty_placements = snapshot_kitty_placements(&mut inner);
+            let kitty_placements = snapshot_kitty_placements(inner.terminal, &mut capture.kitty);
             let epoch = SnapshotEpoch {
                 fallback_cols,
                 fallback_rows,
@@ -4434,6 +4567,72 @@ fn with_terminal_bytes<R>(
     Some(read(unsafe {
         std::slice::from_raw_parts(value.ptr, value.len)
     }))
+}
+
+unsafe extern "C" fn vt_render_hold_callback(
+    terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    held: bool,
+) {
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let mut capture = state.capture.lock();
+    if !held {
+        capture.deadline = None;
+        capture.pending = None;
+        return;
+    }
+    capture.deadline = Some(Instant::now() + std::time::Duration::from_secs(1));
+    capture.serial = capture.serial.wrapping_add(1);
+    capture.generation = capture.generation.wrapping_add(1);
+    capture.pending = None;
+    let cols = state.cols.load(Ordering::Relaxed);
+    let rows = state.rows.load(Ordering::Relaxed);
+    let mut active_screen = GhosttyTerminalScreen::Primary;
+    if unsafe {
+        ghostty_terminal_get(
+            terminal,
+            GhosttyTerminalData::ActiveScreen,
+            (&mut active_screen as *mut GhosttyTerminalScreen).cast(),
+        )
+    } != GHOSTTY_SUCCESS
+    {
+        return;
+    }
+    let highlights = match capture.search.as_mut() {
+        Some(search) => match search.capture_highlights(terminal, cols, rows, true) {
+            Ok(highlights) => highlights,
+            Err(err) => {
+                log::warn!("render hold search capture: {err}");
+                return;
+            }
+        },
+        None => Vec::new(),
+    };
+    let epoch = SnapshotEpoch {
+        fallback_cols: cols,
+        fallback_rows: rows,
+        search_highlights: highlights,
+        kitty_placements: snapshot_kitty_placements(terminal, &mut capture.kitty),
+        alternate_screen: active_screen == GhosttyTerminalScreen::Alternate,
+        scrollbar: read_scrollbar(terminal),
+        generation: capture.generation,
+        required_full_snapshot_generation: capture.generation,
+    };
+    let mut frame = HeldFrame {
+        state: std::ptr::null_mut(),
+        epoch,
+    };
+    let rc = unsafe { ghostty_render_state_new(std::ptr::null(), &mut frame.state) };
+    if rc != GHOSTTY_SUCCESS || frame.state.is_null() {
+        log::warn!("render hold state allocation rc={rc}");
+        return;
+    }
+    let rc = unsafe { ghostty_render_state_begin_update(frame.state, terminal) };
+    if rc != GHOSTTY_SUCCESS {
+        log::warn!("render hold begin_update rc={rc}");
+        return;
+    }
+    capture.pending = Some(frame);
 }
 
 unsafe extern "C" fn vt_paste_read_callback(
@@ -5195,15 +5394,14 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
     }
 }
 
-fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
-    if inner.kitty_snapshot_generation == inner.generation {
-        return inner.kitty_placements.clone();
-    }
-
+fn snapshot_kitty_placements(
+    terminal: GhosttyTerminal,
+    inner: &mut KittySnapshot,
+) -> Arc<[KittyPlacement]> {
     let mut graphics: GhosttyKittyGraphics = std::ptr::null_mut();
     let rc = unsafe {
         ghostty_terminal_get(
-            inner.terminal,
+            terminal,
             GhosttyTerminalData::KittyGraphics,
             &mut graphics as *mut _ as *mut c_void,
         )
@@ -5215,7 +5413,6 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
     if graphics.is_null() {
         inner.kitty_image_cache.clear();
         inner.kitty_placements = Arc::from([]);
-        inner.kitty_snapshot_generation = inner.generation;
         return inner.kitty_placements.clone();
     }
 
@@ -5288,7 +5485,7 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
             ghostty_kitty_graphics_placement_render_info(
                 inner.kitty_placement_iter,
                 image_handle,
-                inner.terminal,
+                terminal,
                 &mut info,
             )
         };
@@ -5344,7 +5541,6 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
     placements.sort_by_key(|placement| placement.z);
     inner.kitty_image_cache = images;
     inner.kitty_placements = placements.into();
-    inner.kitty_snapshot_generation = inner.generation;
     inner.kitty_placements.clone()
 }
 
@@ -5667,12 +5863,6 @@ impl Drop for VtScreen {
                 unsafe { ghostty_key_encoder_free(inner.key_encoder) };
                 inner.key_encoder = std::ptr::null_mut();
             }
-            if !inner.kitty_placement_iter.is_null() {
-                unsafe {
-                    ghostty_kitty_graphics_placement_iterator_free(inner.kitty_placement_iter)
-                };
-                inner.kitty_placement_iter = std::ptr::null_mut();
-            }
             if !render.row_cells.is_null() {
                 unsafe { ghostty_render_state_row_cells_free(render.row_cells) };
                 render.row_cells = std::ptr::null_mut();
@@ -5688,6 +5878,7 @@ impl Drop for VtScreen {
             if let Some(mut selection_gesture) = inner.selection_gesture.take() {
                 unsafe { selection_gesture.free(inner.terminal) };
             }
+            *inner.callback_state.capture.get_mut() = RenderCapture::default();
             if !inner.terminal.is_null() {
                 unsafe { ghostty_terminal_free(inner.terminal) };
                 inner.terminal = std::ptr::null_mut();
@@ -5702,6 +5893,148 @@ mod tests {
     use std::ffi::CStr;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn synchronized_output_captures_same_write_boundary() {
+        let screen = VtScreen::new(20, 3, None).unwrap();
+        screen.feed(b"prefix\x1b[?2026hhidden");
+        let held = screen.snapshot();
+        assert_eq!(held.cells[0].codepoint, 'p' as u32);
+        assert_eq!(held.cells[6].codepoint, 0);
+        assert_eq!(held.cursor.col, 6);
+        screen.feed(b"more");
+        assert_eq!(screen.snapshot().generation, held.generation);
+        screen.feed(b"\x1b[?2026l");
+        assert_eq!(screen.snapshot().cells[6].codepoint, 'h' as u32);
+    }
+
+    #[test]
+    fn synchronized_output_failed_capture_keeps_last_complete_frame() {
+        let screen = VtScreen::new(10, 3, None).unwrap();
+        screen.feed(b"old");
+        let old = screen.snapshot();
+        screen.acknowledge_snapshot(old.generation);
+        screen.feed(b"\x1b[2;1Hnew\x1b[H\x1b[?2026hhidden");
+        // Inject a capture failure after native damage has been consumed.
+        screen.inner.lock().callback_state.capture.lock().pending = None;
+        let fallback = screen.snapshot();
+        assert_eq!(fallback.cells, old.cells);
+        assert_eq!(fallback.generation, old.generation);
+        screen.acknowledge_snapshot(fallback.generation);
+        screen.feed(b"\x1b[?2026l");
+        let live = screen.snapshot();
+        assert_eq!(live.cells[0].codepoint, 'h' as u32);
+        assert_eq!(live.cells[10].codepoint, 'n' as u32);
+        assert_ne!(live.generation, old.generation);
+    }
+
+    #[test]
+    fn synchronized_output_coalesces_boundaries_without_losing_damage() {
+        let screen = VtScreen::new(10, 3, None).unwrap();
+        screen.feed(b"old");
+        let old = screen.snapshot();
+        screen.acknowledge_snapshot(old.generation);
+        screen.feed(b"\rfirst\x1b[?2026h\rsecond\x1b[?2026l\x1b[?2026h\rthird");
+        screen.acknowledge_snapshot(old.generation);
+        let held = screen.snapshot();
+        assert_ne!(held.generation, old.generation);
+        assert_eq!(held.cells[0].codepoint, 's' as u32);
+        assert!(!held.dirty_rows.is_empty());
+        screen.acknowledge_snapshot(held.generation);
+        assert!(screen.snapshot().dirty_rows.is_empty());
+        screen.feed(b"\x1b[?2026l");
+        let released = screen.snapshot();
+        assert_eq!(released.cells[0].codepoint, 't' as u32);
+        screen.acknowledge_snapshot(released.generation);
+
+        // The callback consumes row 1 damage, but its capture is released
+        // before adoption. Only row 2 is dirtied after that boundary.
+        // Park the cursor elsewhere: cursor-row damage would mask the loss.
+        screen.feed(b"\x1b[2;1Hchanged\x1b[H\x1b[?2026h\x1b[3;1Htail\x1b[H\x1b[?2026l");
+        let live = screen.snapshot();
+        assert_eq!(live.cells[10].codepoint, 'c' as u32);
+        assert_eq!(live.cells[20].codepoint, 't' as u32);
+    }
+
+    #[test]
+    fn synchronized_output_repeated_set_reset_resize_and_timeout() {
+        let screen = VtScreen::new(12, 3, None).unwrap();
+        screen.feed(b"\x1b[?25l\x1b[2 qA\x1b[?2026hB");
+        let deadline = screen.render_hold_deadline().unwrap();
+        let held = screen.snapshot();
+        assert!(!held.cursor.visible);
+        assert!(!held.cursor.blinking);
+        screen.feed(b"\x1b[?2026hC");
+        assert_eq!(screen.render_hold_deadline(), Some(deadline));
+        assert!(!screen.expire_render_hold(deadline));
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        assert!(screen.expire_render_hold(deadline));
+        assert!(!screen.mode_active(ghostty_mode(2026, false)));
+        let live = screen.snapshot();
+        assert_ne!(live.generation, held.generation);
+        assert_eq!(live.cells[2].codepoint, 'C' as u32);
+        screen.feed(b"\x1b[?2026hD");
+        assert!(
+            !screen.expire_render_hold(deadline),
+            "stale timer must not release a new hold"
+        );
+        screen.resize(15, 4, 8, 16).unwrap();
+        assert_eq!(screen.render_hold_deadline(), None);
+        assert_eq!(screen.snapshot().cols, 15);
+        screen.feed(b"\x1b[?2026hE\x1bc");
+        assert_eq!(screen.render_hold_deadline(), None);
+        assert_eq!(screen.snapshot().cells[0].codepoint, 0);
+    }
+
+    #[test]
+    fn synchronized_output_feed_does_not_wait_for_render_extraction() {
+        let screen = Arc::new(VtScreen::new(10, 3, None).unwrap());
+        let render = screen.render.lock();
+        let writer = screen.clone();
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            writer.feed(b"prefix\x1b[?2026hhidden");
+            tx.send(()).unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_secs(5));
+        drop(render);
+        worker.join().unwrap();
+        result.expect("hold capture must not acquire the canonical render lock");
+        assert_eq!(screen.snapshot().cursor.col, 6);
+    }
+
+    #[test]
+    fn synchronized_output_captures_kitty_and_screen_metadata() {
+        let screen = VtScreen::new(20, 3, None).unwrap();
+        screen.resize(20, 3, 8, 16).unwrap();
+        screen.feed(b"1\r\n2\r\n3\r\n4\r\n");
+        screen.feed(b"\x1b_Ga=T,f=32,s=1,v=1,i=7,q=2;AAAA/w==\x1b\\\x1b[?2026h\x1b_Ga=d,d=A,q=2\x1b\\\x1b[?1049h");
+        let held = screen.snapshot();
+        assert_eq!(held.kitty_placements.len(), 1);
+        assert_eq!(
+            held.kitty_placements[0].image.rgba.as_ref(),
+            &[0, 0, 0, 255]
+        );
+        assert!(!held.alternate_screen);
+        assert!(held.scrollbar.is_some());
+        assert_eq!(
+            screen.snapshot_scrollbar(),
+            Some((held.generation, held.scrollbar))
+        );
+        assert_ne!(
+            screen.scrollbar(),
+            held.scrollbar,
+            "live alternate screen differs from the held primary viewport"
+        );
+        screen.feed(b"\x1b[?2026l");
+        let live = screen.snapshot();
+        assert!(live.kitty_placements.is_empty());
+        assert!(live.alternate_screen);
+        assert_eq!(
+            screen.snapshot_scrollbar(),
+            Some((live.generation, live.scrollbar))
+        );
+    }
 
     #[test]
     fn hyperlink_at_reads_targets_not_labels_and_respects_boundaries() {
@@ -5762,6 +6095,14 @@ mod tests {
         let types = &manifest["types"];
 
         assert_eq!(manifest["schema"].as_u64(), Some(1));
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["RENDER_HOLD"].as_i64(),
+            Some(GhosttyTerminalOption::RenderHold as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["MODE"].as_i64(),
+            Some(GhosttyTerminalOption::Mode as i64)
+        );
         for (name, style) in [
             ("BAR", CursorStyle::Bar),
             ("BLOCK", CursorStyle::Block),

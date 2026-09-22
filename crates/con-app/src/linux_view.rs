@@ -262,6 +262,7 @@ pub struct GhosttyView {
     terminal_focused: bool,
     cursor_blink: CursorBlink,
     cursor_blink_task: Option<(Instant, Task<()>)>,
+    render_hold_task: Option<(Instant, Task<()>)>,
     cursor_subscriptions: Vec<Subscription>,
     display_cursor: VtCursor,
     initial_cwd: Option<std::path::PathBuf>,
@@ -356,6 +357,7 @@ impl GhosttyView {
                                 changed |= view.refresh_snapshot();
                             }
                         }
+                        view.arm_render_hold(cx);
                         if changed {
                             cx.notify();
                         }
@@ -376,6 +378,7 @@ impl GhosttyView {
             terminal_focused: false,
             cursor_blink: CursorBlink::default(),
             cursor_blink_task: None,
+            render_hold_task: None,
             cursor_subscriptions: Vec::new(),
             display_cursor: VtCursor::default(),
             initial_cwd: cwd,
@@ -620,6 +623,7 @@ impl GhosttyView {
         if terminal.take_needs_render() {
             changed |= self.refresh_snapshot();
         }
+        self.arm_render_hold(cx);
 
         if terminal.take_bell() {
             changed = true;
@@ -682,6 +686,7 @@ impl GhosttyView {
             if terminal.take_needs_render() {
                 changed |= self.refresh_snapshot();
             }
+            self.arm_render_hold(cx);
 
             if terminal.take_bell() {
                 changed = true;
@@ -778,6 +783,36 @@ impl GhosttyView {
                 }
             }
         }
+    }
+
+    fn arm_render_hold(&mut self, cx: &mut Context<Self>) {
+        let deadline = self
+            .terminal
+            .as_ref()
+            .and_then(|terminal| terminal.render_hold_deadline());
+        if self
+            .render_hold_task
+            .as_ref()
+            .map(|(deadline, _)| *deadline)
+            == deadline
+        {
+            return;
+        }
+        self.render_hold_task = deadline.map(|deadline| {
+            let terminal = self.terminal.as_ref().unwrap().clone();
+            let task = cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(deadline.saturating_duration_since(Instant::now()))
+                    .await;
+                if terminal.expire_render_hold(deadline) {
+                    let _ = this.update(cx, |view, cx| {
+                        view.refresh_snapshot();
+                        cx.notify();
+                    });
+                }
+            });
+            (deadline, task)
+        });
     }
 
     fn refresh_snapshot(&mut self) -> bool {
