@@ -676,6 +676,14 @@ impl LinuxPtySession {
         self.shared.screen.acknowledge_snapshot(generation);
     }
 
+    pub fn expire_render_hold(&self, deadline: std::time::Instant) -> bool {
+        if !self.shared.screen.expire_render_hold(deadline) {
+            return false;
+        }
+        self.mark_needs_render();
+        true
+    }
+
     pub fn set_theme(&self, colors: &TerminalColors) {
         let theme = theme_colors_to_vt(colors);
         self.shared.screen.set_theme(&theme);
@@ -1847,6 +1855,33 @@ mod tests {
         };
 
         assert_eq!(output.matches("<hello world>|<-leading-dash>").count(), 1);
+    }
+
+    #[test]
+    fn synchronized_output_idle_timeout_marks_dirty_and_wakes() {
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let session = LinuxPtySession::spawn(LinuxPtyOptions {
+            command_program: Some(OsString::from("/bin/sh")),
+            command_args: Some(vec![OsString::from("-c"), OsString::from("sleep 30")]),
+            wake_callback: Some(Arc::new(move || {
+                let _ = wake_tx.send(());
+            })),
+            ..LinuxPtyOptions::default()
+        })
+        .unwrap();
+        // No PTY output or blinking cursor can supply a later wake.
+        session.vt().feed(b"\x1b[?25lA\x1b[?2026hB");
+        let deadline = session.vt().render_hold_deadline().unwrap();
+        let held = session.snapshot().unwrap();
+        assert!(!held.cursor.visible);
+        assert_eq!(held.cells[1].codepoint, 0);
+        session.take_needs_render();
+        while wake_rx.try_recv().is_ok() {}
+        std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        assert!(session.expire_render_hold(deadline));
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(session.take_needs_render());
+        assert_eq!(session.snapshot().unwrap().cells[1].codepoint, 'B' as u32);
     }
 
     #[test]

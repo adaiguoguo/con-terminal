@@ -820,6 +820,10 @@ impl RenderSession {
         self.vt.scrollbar()
     }
 
+    pub fn snapshot_scrollbar(&self) -> Option<(u64, Option<GhosttyScrollbar>)> {
+        self.vt.snapshot_scrollbar()
+    }
+
     pub fn generation(&self) -> u64 {
         self.vt.generation()
     }

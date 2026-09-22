@@ -24,11 +24,16 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// required to keep the Windows VT active area aligned with ConPTY.
 /// `include/ghostty.h` unchanged; VT adds option 40 and clarifies empty output.
 ///
+/// 2026-09-22 bump: minimal revision with the render-hold callback needed
+/// to capture DEC2026 frame boundaries inside a PTY write. Public headers
+/// only add option 41, its callback typedef, and render lifecycle docs.
+/// `include/ghostty.h` and existing public layouts/signatures are unchanged.
+///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "b32f20f3e8d25bb925ec545c54498e93518e7ced";
+const GHOSTTY_REV: &str = "e5077949834c3291a9434f88b38a381d8f5fedfc";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
