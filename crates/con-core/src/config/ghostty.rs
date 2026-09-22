@@ -182,6 +182,14 @@ fn complete_schema() -> Result<Value> {
                 false,
             );
         }
+        if provider == "chatgpt" {
+            insert(
+                &mut schema,
+                "agent.providers.chatgpt.reasoning_effort",
+                Value::Null,
+                false,
+            );
+        }
         insert(
             &mut schema,
             &format!("agent.providers.{provider}.max_tokens"),
@@ -664,6 +672,39 @@ mod tests {
             serde_json::to_value(config).unwrap(),
             serde_json::to_value(decoded).unwrap()
         );
+    }
+
+    #[test]
+    fn subscription_reasoning_effort_round_trips_and_rejects_unknown_wire_values() {
+        let config = parse(
+            "con.agent.providers.chatgpt.reasoning_effort = high\n",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .agent
+                .providers
+                .chatgpt
+                .as_ref()
+                .unwrap()
+                .reasoning_effort,
+            Some(con_agent::chatgpt_subscription::ReasoningEffort::High)
+        );
+        let text = render(&config).unwrap();
+        assert!(text.contains("con.agent.providers.chatgpt.reasoning_effort = high"));
+        assert_eq!(
+            parse(&text, None).unwrap().agent.providers.chatgpt,
+            config.agent.providers.chatgpt
+        );
+        assert!(
+            parse(
+                "con.agent.providers.chatgpt.reasoning_effort = future-mode\n",
+                None
+            )
+            .is_err()
+        );
+        assert!(parse("con.agent.providers.openai.reasoning_effort = high\n", None).is_err());
     }
 
     #[test]
