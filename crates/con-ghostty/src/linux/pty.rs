@@ -16,8 +16,8 @@ use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
     PtyWriteClass, ScreenSnapshot, SelectionAutoscroll, SelectionAutoscrollUpdate,
-    SelectionGeometry, SelectionPoint, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
-    VtPasteSource, VtScreen,
+    SelectionGeometry, SelectionPoint, ThemeColors, VtKeyEvent, VtKeyOutcome, VtMouseEvent,
+    VtMouseOutcome, VtPasteResult, VtPasteSource, VtScreen,
 };
 use crate::{ClipboardWritePolicy, DesktopNotificationPolicy};
 
@@ -464,16 +464,6 @@ impl LinuxPtySession {
         Ok(())
     }
 
-    pub fn write_control(&self, data: &[u8]) -> Result<()> {
-        self.scroll_viewport_to_bottom();
-        self.shared
-            .screen
-            .write_control(data)
-            .context("failed to queue linux pty control input")?;
-        self.input_generation.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
     pub fn set_focus(&self, focused: bool) -> Result<()> {
         self.shared.screen.set_focus(focused)
     }
@@ -702,16 +692,20 @@ impl LinuxPtySession {
         self.shared.screen.is_decckm()
     }
 
-    pub fn mouse_tracking_active(&self) -> bool {
-        self.shared.screen.mouse_tracking_active()
-    }
-
-    pub fn mouse_motion_tracking_active(&self) -> bool {
-        self.shared.screen.mouse_motion_tracking_active()
-    }
-
-    pub fn is_sgr_mouse(&self) -> bool {
-        self.shared.screen.is_sgr_mouse()
+    pub fn send_mouse_event(&self, event: VtMouseEvent) -> Result<VtMouseOutcome> {
+        let size = self.size();
+        self.shared.screen.set_mouse_geometry(
+            u32::from(size.columns) * size.cell_width_px,
+            u32::from(size.rows) * size.cell_height_px,
+            size.cell_width_px,
+            size.cell_height_px,
+        )?;
+        let outcome = self.shared.screen.send_mouse_event(event)?;
+        if outcome.output_written {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(outcome)
     }
 
     pub fn set_dark_mode(&self, dark: bool) {
@@ -1882,6 +1876,87 @@ mod tests {
         wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(session.take_needs_render());
         assert_eq!(session.snapshot().unwrap().cells[1].codepoint, 'B' as u32);
+    }
+
+    #[test]
+    fn mouse_events_reach_the_pty_in_the_requested_format() {
+        use crate::vt::{VtMouseAction, VtMouseButton, VtMouseEvent, VtMouseModifiers};
+
+        for (mode, expected) in [
+            ("", b"\x1b[M\x32\x24\x28".as_slice()),
+            ("\x1b[?1005h", b"\x1b[M\x32\x24\x28".as_slice()),
+            ("\x1b[?1006h", b"\x1b[<18;4;8M".as_slice()),
+            ("\x1b[?1015h", b"\x1b[50;4;8M".as_slice()),
+            ("\x1b[?1016h", b"\x1b[<18;35;151M".as_slice()),
+        ] {
+            let session = LinuxPtySession::spawn(LinuxPtyOptions {
+                command_program: Some(OsString::from("/bin/sh")),
+                command_args: Some(vec![
+                    OsString::from("-c"),
+                    OsString::from(format!(
+                        "stty raw -echo; printf READY; dd bs=1 count={} 2>/dev/null | od -An -tx1; sleep 1",
+                        expected.len()
+                    )),
+                ]),
+                size: crate::stub::SurfaceSize {
+                    columns: 80, rows: 24, width_px: 800, height_px: 480,
+                    cell_width_px: 10, cell_height_px: 20,
+                },
+                ..LinuxPtyOptions::default()
+            }).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while !session.read_recent_lines(24).join(" ").contains("READY") {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "PTY did not become ready"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            session.vt().feed(format!("\x1b[?1000h{mode}").as_bytes());
+            let event = VtMouseEvent {
+                action: VtMouseAction::Press,
+                button: Some(VtMouseButton::Right),
+                modifiers: VtMouseModifiers {
+                    control: true,
+                    ..Default::default()
+                },
+                surface_x_px: 35.25,
+                surface_y_px: 150.75,
+            };
+            let generation = session.input_generation();
+            assert!(
+                session.send_mouse_event(event).unwrap().output_written,
+                "{mode:?}"
+            );
+            assert_eq!(session.input_generation(), generation + 1);
+            let motion = VtMouseEvent {
+                action: VtMouseAction::Motion,
+                ..event
+            };
+            assert!(!session.send_mouse_event(motion).unwrap().output_written);
+            assert_eq!(session.input_generation(), generation + 1);
+            let expected_hex = expected
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            loop {
+                let output = session
+                    .read_recent_lines(24)
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if output.contains(&expected_hex) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "mode={mode:?}: expected {expected_hex:?}, got {output:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 
     #[test]

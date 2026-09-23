@@ -1979,10 +1979,9 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd,
-        FileSidebarShortcutBindings, FindInTerminal, FocusFiles, FocusInput, NewTab, SearchFiles,
-        SelectTab1, ToggleAgentPanel, Undo, binding_specs, command_palette,
-        keystroke_matches_single_binding, push_app_override,
+        BindingSpec, EditorDeleteBackward, EditorInsertNewline, FileSidebarShortcutBindings,
+        FindInTerminal, FocusFiles, FocusInput, NewTab, SearchFiles, SelectTab1, ToggleAgentPanel,
+        Undo, binding_specs, command_palette, keystroke_matches_single_binding, push_app_override,
     };
     use con_core::config::KeybindingConfig;
     use gpui::Keystroke;
@@ -2208,7 +2207,7 @@ mod tests {
     #[test]
     fn editor_shortcuts_stay_editor_only() {
         let specs = default_specs();
-        let mut cases = vec![
+        let cases = [
             (
                 "EditorInsertNewline",
                 scope_names(&specs_for_action::<EditorInsertNewline>(&specs)),
@@ -2218,12 +2217,12 @@ mod tests {
                 scope_names(&specs_for_action::<EditorDeleteBackward>(&specs)),
             ),
             ("Undo", scope_names(&specs_for_action::<Undo>(&specs))),
+            #[cfg(target_os = "macos")]
+            (
+                "EditorMoveLineEnd",
+                scope_names(&specs_for_action::<super::EditorMoveLineEnd>(&specs)),
+            ),
         ];
-        #[cfg(target_os = "macos")]
-        cases.push((
-            "EditorMoveLineEnd",
-            scope_names(&specs_for_action::<EditorMoveLineEnd>(&specs)),
-        ));
 
         for (name, scopes) in cases {
             assert_eq!(
