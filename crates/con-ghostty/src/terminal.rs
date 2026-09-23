@@ -382,45 +382,83 @@ fn build_ghostty_config(
         return Err("ghostty_config_new returned null".into());
     }
     let owned = OwnedGhosttyConfig(config);
-    let load = |text: &str, dir: &Path, recursive: bool| -> Result<(), String> {
-        if text.is_empty() {
-            return Ok(());
-        }
-        let file = PrivateConfigFile::create(dir, text)?;
-        let path = file
-            .0
-            .to_str()
-            .ok_or("native Ghostty config path is not UTF-8")?;
-        let cpath = CString::new(path).map_err(|e| format!("native Ghostty config path: {e}"))?;
-        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
-        if recursive {
-            unsafe { ffi::ghostty_config_load_recursive_files(config) };
-        }
-        Ok(())
-    };
+    let mut generated_paths = Vec::new();
+    let mut load =
+        |text: &str, dir: &Path, recursive: bool, label: &'static str| -> Result<(), String> {
+            if text.is_empty() {
+                return Ok(());
+            }
+            let file = PrivateConfigFile::create(dir, text)?;
+            let path = file
+                .0
+                .to_str()
+                .ok_or("native Ghostty config path is not UTF-8")?;
+            let cpath =
+                CString::new(path).map_err(|e| format!("native Ghostty config path: {e}"))?;
+            unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
+            if recursive {
+                unsafe { ffi::ghostty_config_load_recursive_files(config) };
+            }
+            generated_paths.push((path.to_owned(), label));
+            Ok(())
+        };
     let runtime_dir = source
         .map(|s| s.base_dir.as_path())
         .unwrap_or_else(|| Path::new("/tmp"));
     // Con's constructor values are fallbacks. Native source is then replayed,
     // explicit runtime overrides follow it, and immutable host policy is last.
-    load(&defaults.to_config_string(false)?, runtime_dir, false)?;
+    load(
+        &defaults.to_config_string(false)?,
+        runtime_dir,
+        false,
+        "generated defaults",
+    )?;
     if let Some(source) = source {
-        load(&source.text, &source.base_dir, true)?;
+        load(
+            &source.text,
+            &source.base_dir,
+            true,
+            "generated native configuration",
+        )?;
     }
-    load(&overrides.to_config_string(false)?, runtime_dir, false)?;
+    load(
+        &overrides.to_config_string(false)?,
+        runtime_dir,
+        false,
+        "generated runtime overrides",
+    )?;
     let mut policy = GhosttyConfigPatch::default().to_config_string(true)?;
     if source.is_some() && overrides.font_family.is_none() {
         // Native font choices do not pass through the portable patch builder,
         // which otherwise appends Con's bundled Nerd Font itself.
         policy.push_str(&format!("font-family = {DEFAULT_GHOSTTY_FONT_FAMILY}\n"));
     }
-    load(&policy, runtime_dir, false)?;
+    load(&policy, runtime_dir, false, "generated host policy")?;
     unsafe { ffi::ghostty_config_finalize(config) };
     let count = unsafe { ffi::ghostty_config_diagnostics_count(config) };
     if count != 0 {
-        return Err(format!(
-            "Ghostty configuration rejected with {count} diagnostic(s)"
-        ));
+        let mut error = format!("Ghostty configuration rejected with {count} diagnostic(s)");
+        for index in 0..count {
+            let diagnostic = unsafe { ffi::ghostty_config_get_diagnostic(config, index) };
+            // SAFETY: valid indices return NUL-terminated strings owned by
+            // `config`. Copy before `owned` drops; never free them separately.
+            let message = unsafe { CStr::from_ptr(diagnostic.message) }.to_string_lossy();
+            error.push('\n');
+            // Replace only the location prefix of our private files. Included
+            // paths and message contents retain their upstream provenance.
+            if let Some((label, location)) = generated_paths.iter().find_map(|(path, label)| {
+                message
+                    .strip_prefix(path)
+                    .filter(|rest| rest.starts_with(':'))
+                    .map(|rest| (*label, rest))
+            }) {
+                error.push_str(label);
+                error.push_str(location);
+            } else {
+                error.push_str(&message);
+            }
+        }
+        return Err(error);
     }
     Ok(owned)
 }
@@ -2647,6 +2685,81 @@ mod tests {
     }
 
     #[test]
+    fn native_config_diagnostics_report_all_errors() {
+        let (_cleanup, root) = temp_test_dir("con-native-diagnostics-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let error = super::validate_native_config(
+            "# Keep source line numbers\nnot-a-real-option = true\ncursor-style = invalid-style\n",
+            &root,
+        )
+        .unwrap_err();
+        let lines: Vec<_> = error.lines().collect();
+        assert_eq!(lines.len(), 3, "{error}");
+        assert_eq!(
+            lines[0],
+            "Ghostty configuration rejected with 2 diagnostic(s)"
+        );
+        assert!(
+            lines[1] == "generated native configuration:2:not-a-real-option: unknown field",
+            "{error}"
+        );
+        assert!(
+            lines[2].starts_with(
+                "generated native configuration:3:cursor-style: invalid value \"invalid-style\""
+            ),
+            "{error}"
+        );
+        // Diagnostics own their text after the native config and its temporary
+        // source file are dropped, without leaving private config files behind.
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn native_config_diagnostics_preserve_include_locations_and_load_errors() {
+        let (_cleanup, root) = temp_test_dir("con-native-include-diagnostics-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let include = root.join("样式.conf");
+        std::fs::write(&include, "# Included config\nnot-an-option = true\n").unwrap();
+        let error = super::validate_native_config("config-file = 样式.conf\n", &root).unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "{}:2:not-an-option: unknown field",
+                include.display()
+            )),
+            "{error}"
+        );
+
+        let error =
+            super::validate_native_config("config-file = missing.conf\n", &root).unwrap_err();
+        assert!(error.contains("error opening config-file"), "{error}");
+        assert!(
+            error.contains("missing.conf: error.FileNotFound"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn native_config_diagnostics_identify_generated_patch_layers() {
+        ensure_ghostty_init().unwrap();
+        let invalid = GhosttyConfigPatch {
+            cursor_style: Some("invalid-style".into()),
+            ..Default::default()
+        };
+        let empty = GhosttyConfigPatch::default();
+        for (defaults, overrides, label) in [
+            (&invalid, &empty, "generated defaults:"),
+            (&empty, &invalid, "generated runtime overrides:"),
+        ] {
+            let error = build_ghostty_config(defaults, None, overrides)
+                .err()
+                .expect("invalid patch must be rejected");
+            let detail = error.lines().nth(1).expect("diagnostic detail");
+            assert!(detail.starts_with(label), "{error}");
+            assert!(detail.contains(":cursor-style: invalid value"), "{error}");
+        }
+    }
+
+    #[test]
     fn native_command_quotes_are_literal_and_newlines_are_rejected() {
         ensure_ghostty_init().unwrap();
         let (_cleanup, root) = temp_test_dir("con-native-quote-test");
@@ -2707,28 +2820,6 @@ mod tests {
                 expected
             );
         }
-    }
-
-    #[test]
-    fn native_config_returns_parser_diagnostics() {
-        ensure_ghostty_init().unwrap();
-        let (_cleanup, root) = temp_test_dir("con-ghostty-native-diagnostic-test");
-        std::fs::create_dir_all(&root).unwrap();
-        let source = NativeConfigSource {
-            text: "not-a-real-ghostty-option = true\n".into(),
-            base_dir: root,
-        };
-
-        let error = match build_ghostty_config(
-            &GhosttyConfigPatch::default(),
-            Some(&source),
-            &GhosttyConfigPatch::default(),
-        ) {
-            Ok(_) => panic!("invalid native config unexpectedly parsed"),
-            Err(error) => error,
-        };
-
-        assert!(error.contains("1 diagnostic"), "{error}");
     }
 
     #[test]
