@@ -926,6 +926,11 @@ impl GhosttyView {
         action: VtMouseAction,
         button: Option<VtMouseButton>,
     ) -> bool {
+        // The encoder clamps captured drags/releases to the grid. An initial
+        // press (including wheel buttons) in padding must not hit an edge cell.
+        if action == VtMouseAction::Press && self.cell_from_event_position(pos).is_none() {
+            return false;
+        }
         let Some(bounds) = self.pane_bounds else {
             return false;
         };
@@ -1092,6 +1097,47 @@ impl GhosttyView {
                     false
                 }
             },
+        }
+    }
+
+    fn update_mouse_sequences(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) -> bool {
+        // GPUI Wayland clears its single pressed-button slot when *any* button
+        // is released. Only matching mouse-up or focus cancellation ends our
+        // captures; a buttonless move may still belong to a held chord button.
+        let button = event.pressed_button.or_else(|| {
+            if self.terminal_left_mouse_sequence.is_active() {
+                Some(MouseButton::Left)
+            } else if self.terminal_middle_mouse_sequence.is_active() {
+                Some(MouseButton::Middle)
+            } else if self.terminal_right_mouse_sequence.is_active() {
+                Some(MouseButton::Right)
+            } else {
+                None
+            }
+        });
+        match button {
+            Some(MouseButton::Left) => self.update_left_mouse_sequence(event.position, cx),
+            Some(MouseButton::Middle) if self.terminal_middle_mouse_sequence.is_active() => {
+                self.report_mouse(
+                    event.position,
+                    VtMouseAction::Motion,
+                    Some(VtMouseButton::Middle),
+                );
+                false
+            }
+            Some(MouseButton::Right) if self.terminal_right_mouse_sequence.is_active() => {
+                self.report_mouse(
+                    event.position,
+                    VtMouseAction::Motion,
+                    Some(VtMouseButton::Right),
+                );
+                false
+            }
+            None if !event.modifiers.shift => {
+                self.report_mouse(event.position, VtMouseAction::Motion, None);
+                false
+            }
+            _ => false,
         }
     }
 
@@ -2424,39 +2470,7 @@ impl Render for GhosttyView {
                     }
                 }
                 let mut changed = this.update_hovered_link(&event.modifiers);
-                if event.pressed_button == Some(MouseButton::Left) {
-                    changed |= this.update_left_mouse_sequence(event.position, cx);
-                } else if event.pressed_button.is_none()
-                    && this.terminal_left_mouse_sequence.is_active()
-                {
-                    changed |= this.finish_left_mouse_sequence(event.position);
-                }
-                if event.pressed_button.is_none() && this.terminal_right_mouse_sequence.is_active()
-                {
-                    changed |= this.finish_right_mouse_sequence(event.position);
-                }
-                if event.pressed_button.is_none() {
-                    changed |= this.finish_middle_mouse_sequence(event.position);
-                }
-                if event.pressed_button == Some(MouseButton::Right)
-                    && this.terminal_right_mouse_sequence.is_active()
-                {
-                    this.report_mouse(
-                        event.position,
-                        VtMouseAction::Motion,
-                        Some(VtMouseButton::Right),
-                    );
-                } else if event.pressed_button == Some(MouseButton::Middle)
-                    && this.terminal_middle_mouse_sequence.is_active()
-                {
-                    this.report_mouse(
-                        event.position,
-                        VtMouseAction::Motion,
-                        Some(VtMouseButton::Middle),
-                    );
-                } else if event.pressed_button.is_none() && !event.modifiers.shift {
-                    this.report_mouse(event.position, VtMouseAction::Motion, None);
-                }
+                changed |= this.update_mouse_sequences(event, cx);
                 if changed {
                     cx.notify();
                 }
@@ -3536,6 +3550,129 @@ mod tests {
     };
     use gpui::{Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
     use std::sync::Arc;
+
+    fn mouse_test_view(cx: &mut gpui::TestAppContext) -> gpui::Entity<super::GhosttyView> {
+        use con_ghostty::linux::pty::LinuxPtyOptions;
+        use gpui::{AppContext, Bounds, point, px, size};
+        use std::time::{Duration, Instant};
+
+        let app = Arc::new(
+            con_ghostty::GhosttyApp::new(
+                None, None, None, None, None, None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap(),
+        );
+        let view = cx.new(|cx| super::GhosttyView::new(app, None, None, None, 14.0, cx));
+        view.update(cx, |view, _cx| {
+            let terminal = view.terminal().unwrap();
+            let mut options = LinuxPtyOptions::default();
+            options.command_program = Some("/bin/sh".into());
+            options.command_args = Some(vec![
+                "-c".into(),
+                "stty raw -echo; printf '\x1b[?1002h\x1b[?1006hREADY'; exec sleep 30".into(),
+            ]);
+            options.size = con_ghostty::SurfaceSize {
+                columns: 80,
+                rows: 24,
+                width_px: 1120,
+                height_px: 720,
+                cell_width_px: 14,
+                cell_height_px: 30,
+            };
+            terminal.spawn_with_options(options).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !terminal.read_recent_lines(24).join(" ").contains("READY") {
+                assert!(Instant::now() < deadline, "mouse test PTY not ready");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            view.refresh_snapshot();
+            view.scale_factor = 1.5;
+            view.pane_bounds = Some(Bounds::new(
+                point(px(31.0), px(47.0)),
+                size(px(800.0), px(520.0)),
+            ));
+        });
+        view
+    }
+
+    #[gpui::test]
+    fn mouse_presses_reject_padding_but_captured_events_can_leave_grid(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::{VtMouseAction as Action, VtMouseButton as Button};
+        use gpui::{point, px};
+
+        let view = mouse_test_view(cx);
+        view.update(cx, |view, _cx| {
+            // 1.5x scale: grid begins at (43, 57), cells are 14x30 device px.
+            for button in [
+                Button::Left,
+                Button::Middle,
+                Button::Right,
+                Button::Button4,
+                Button::Button7,
+            ] {
+                for (x, y) in [(42.5, 80.0), (60.0, 56.5), (790.0, 80.0), (60.0, 537.0)] {
+                    assert!(
+                        !view.report_mouse(point(px(x), px(y)), Action::Press, Some(button)),
+                        "padding press {button:?} at ({x}, {y})"
+                    );
+                }
+                assert!(view.report_mouse(point(px(43.0), px(57.0)), Action::Press, Some(button)));
+            }
+            assert!(view.report_mouse(
+                point(px(789.5), px(536.5)),
+                Action::Press,
+                Some(Button::Left)
+            ));
+            let outside = point(px(20.0), px(40.0));
+            assert!(view.report_mouse(outside, Action::Motion, Some(Button::Left)));
+            assert!(view.report_mouse(outside, Action::Release, Some(Button::Left)));
+        });
+    }
+
+    #[gpui::test]
+    fn buttonless_motion_retains_chord_capture_until_matching_release(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::{LeftMouseSequence, VtMouseAction as Action, VtMouseButton as Button};
+        use gpui::{MouseMoveEvent, point, px};
+
+        let view = mouse_test_view(cx);
+        view.update(cx, |view, cx| {
+            let position = point(px(73.0), px(121.0));
+            assert!(view.report_mouse(position, Action::Press, Some(Button::Middle)));
+            view.terminal_middle_mouse_sequence.begin(());
+            assert!(view.report_mouse(position, Action::Press, Some(Button::Left)));
+            view.terminal_left_mouse_sequence
+                .begin(LeftMouseSequence::TerminalReport);
+            assert!(view.finish_left_mouse_sequence(position));
+            // Cross a cell boundary: same-cell motion is correctly deduplicated.
+            let position = point(px(103.0), px(161.0));
+            let generation = view.terminal().unwrap().input_generation();
+            view.update_mouse_sequences(
+                &MouseMoveEvent {
+                    position,
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert!(view.terminal_middle_mouse_sequence.is_active());
+            assert_eq!(view.terminal().unwrap().input_generation(), generation + 1);
+            assert!(view.finish_middle_mouse_sequence(position));
+            assert!(!view.finish_middle_mouse_sequence(position));
+            let generation = view.terminal().unwrap().input_generation();
+            view.update_mouse_sequences(
+                &MouseMoveEvent {
+                    position,
+                    ..Default::default()
+                },
+                cx,
+            );
+            // Button-event mode must not emit hover once the actual release arrives.
+            assert_eq!(view.terminal().unwrap().input_generation(), generation);
+        });
+    }
 
     #[gpui::test]
     fn hover_exit_retains_middle_capture_until_focus_cancellation(cx: &mut gpui::TestAppContext) {
