@@ -875,7 +875,21 @@ pub(crate) fn fresh_window_session_with_history_for_cwd(
 ) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
-    let mut session = Session::default();
+    fresh_window_session_from_persisted(persisted, persisted_history, cwd)
+}
+
+fn fresh_window_session_from_persisted(
+    persisted: Session,
+    persisted_history: GlobalHistoryState,
+    cwd: Option<std::path::PathBuf>,
+) -> Session {
+    // Fresh terminals should still respect the user's last chrome visibility.
+    let mut session = Session {
+        agent_panel_open: persisted.agent_panel_open,
+        input_bar_visible: persisted.input_bar_visible,
+        left_panel_open: persisted.left_panel_open,
+        ..Session::default()
+    };
 
     session.global_shell_history = if persisted_history.global_shell_history.is_empty() {
         persisted.global_shell_history
@@ -1991,6 +2005,60 @@ mod tests {
 
     fn default_specs() -> Vec<BindingSpec> {
         binding_specs(&KeybindingConfig::default())
+    }
+
+    #[test]
+    fn fresh_window_preserves_chrome_visibility_without_restoring_tabs() {
+        for flags in 0..8 {
+            let input_visible = flags & 1 != 0;
+            let sidebar_visible = flags & 2 != 0;
+            let agent_visible = flags & 4 != 0;
+            let mut persisted = super::Session {
+                agent_panel_open: agent_visible,
+                input_bar_visible: input_visible,
+                left_panel_open: Some(sidebar_visible),
+                ..super::Session::default()
+            };
+            persisted.tabs[0].title = "Old terminal".into();
+            persisted.tabs.push(persisted.tabs[0].clone());
+            persisted.active_tab = 1;
+            persisted.input_history = vec!["old command".into()];
+            let history = super::GlobalHistoryState {
+                input_history: vec!["new command".into()],
+                ..Default::default()
+            };
+
+            let session = super::fresh_window_session_from_persisted(
+                persisted,
+                history,
+                Some(std::path::PathBuf::from("/tmp/project")),
+            );
+
+            assert_eq!(session.agent_panel_open, agent_visible);
+            assert_eq!(session.input_bar_visible, input_visible);
+            assert_eq!(session.left_panel_open, Some(sidebar_visible));
+            assert_eq!(session.tabs.len(), 1);
+            assert_eq!(session.active_tab, 0);
+            assert_eq!(session.tabs[0].title, "Terminal");
+            assert_eq!(session.tabs[0].cwd.as_deref(), Some("/tmp/project"));
+            assert_eq!(
+                session.tabs[0].panes[0].cwd.as_deref(),
+                Some("/tmp/project")
+            );
+            assert_eq!(session.input_history, vec!["new command"]);
+        }
+    }
+
+    #[test]
+    fn fresh_window_keeps_legacy_visibility_defaults() {
+        let session = super::fresh_window_session_from_persisted(
+            super::Session::default(),
+            super::GlobalHistoryState::default(),
+            None,
+        );
+        assert!(session.input_bar_visible);
+        assert!(!session.agent_panel_open);
+        assert_eq!(session.left_panel_open, None);
     }
 
     #[cfg(target_os = "linux")]
