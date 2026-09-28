@@ -264,9 +264,7 @@ pub struct SessionSidebar {
     tab_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// Workspace-independent visible preview for tab sidebar drags.
     drag_preview: Rc<RefCell<Option<SidebarDragPreviewState>>>,
-    /// Effective UI opacity from the workspace appearance settings.
-    /// Lower values let the window/terminal backdrop treatment show
-    /// through, matching the rest of con's chrome.
+    /// Independent opacity for selection surfaces and floating cards.
     ui_opacity: f32,
     /// True while the workspace is showing Files/Search beside the
     /// vertical tabs. The sidebar then becomes the single icon rail so
@@ -750,7 +748,6 @@ impl SessionSidebar {
     #[allow(dead_code)]
     fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
         let mode_icon = if self.tools_panel_open || (self.is_pinned() && !self.rail_only_override) {
             "phosphor/caret-line-left.svg"
@@ -787,7 +784,7 @@ impl SessionSidebar {
             .pt(px(self.leading_top_pad))
             .pb(px(8.0))
             .gap(px(RAIL_ICON_GAP))
-            .bg(rail_bg)
+            // The workspace paints the terminal-matched sidebar base once.
             // Mouse-leave on the rail container clears the hover card
             // even when the cursor exits via a fast diagonal motion
             // that may skip the per-icon hover transitions.
@@ -1003,8 +1000,12 @@ impl SessionSidebar {
 
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
-            let active_bg = elevated_surface(theme, self.ui_opacity);
-            let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
+            // Selection must read without the accent stripe. Overlay the shared
+            // base rather than making the same background more opaque.
+            let active_bg = theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.24 } else { 0.12 });
+            let hover_bg = theme.foreground.opacity(0.04);
             // Drop indicator — a 2px primary-color line above this
             // pill if drop_slot == i, or below the last pill if
             // drop_slot == N. Both states share the same indicator
@@ -1300,12 +1301,10 @@ impl SessionSidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let body_bg;
         let header_color;
         let header_font;
         {
             let theme = cx.theme();
-            body_bg = sidebar_surface(theme, self.ui_opacity, 0.045);
             header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
         }
@@ -1508,7 +1507,6 @@ impl SessionSidebar {
             .h_full()
             .w_full()
             .flex_shrink_0()
-            .bg(body_bg)
             .child(header)
             .child(list)
     }

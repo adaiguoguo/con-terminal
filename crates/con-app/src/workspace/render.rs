@@ -444,20 +444,12 @@ impl Render for ConWorkspace {
             a: 1.0,
         }
         .into();
-        let portable_terminal_backdrop_color =
-            terminal_surface_color.opacity(self.terminal_opacity);
         let chrome_transition_seam_color = terminal_surface_color;
         let chrome_static_seam_color =
             terminal_separator_over_backdrop(terminal_surface_color, theme);
         let pane_divider_color = terminal_separator_over_backdrop(terminal_surface_color, theme);
-        #[cfg(target_os = "macos")]
-        let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
-        #[cfg(not(target_os = "macos"))]
-        let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
-        #[cfg(target_os = "macos")]
-        let input_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
-        #[cfg(not(target_os = "macos"))]
-        let input_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
+        let top_bar_surface_color = theme.title_bar.opacity(self.terminal_opacity);
+        let input_bar_surface_color = top_bar_surface_color;
         #[cfg(target_os = "macos")]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
@@ -598,9 +590,6 @@ impl Render for ConWorkspace {
             .min_h_0()
             .w_full()
             .overflow_hidden()
-            .when(cfg!(not(target_os = "macos")), |pane_content| {
-                pane_content.bg(portable_terminal_backdrop_color)
-            })
             .child(pane_tree_rendered)
             .on_children_prepainted(move |bounds_list, _, _| {
                 let Some(bounds) = bounds_list.first().copied() else {
@@ -737,9 +726,6 @@ impl Render for ConWorkspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .when(cfg!(not(target_os = "macos")), |terminal_area| {
-                terminal_area.bg(portable_terminal_backdrop_color)
-            })
             .child(pane_content);
 
         #[cfg(not(target_os = "macos"))]
@@ -769,11 +755,22 @@ impl Render for ConWorkspace {
             };
             terminal_area = terminal_area.child(
                 div()
+                    .relative()
                     .overflow_hidden()
                     .h(px(input_bar_height))
                     .flex_shrink_0()
                     .bg(input_bar_surface_color)
-                    .child(div().h(px(1.0)).bg(chrome_static_seam_color))
+                    .pt(px(1.0))
+                    // Separate output from input without adding another base fill.
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h(px(1.0))
+                            .bg(theme.foreground.opacity(0.10 * input_bar_content_opacity)),
+                    )
                     .child(
                         div()
                             .min_h(px((input_bar_height - 1.0).max(0.0)))
@@ -800,10 +797,7 @@ impl Render for ConWorkspace {
             .relative()
             .flex()
             .flex_1()
-            .min_h_0()
-            .when(cfg!(not(target_os = "macos")), |main_area| {
-                main_area.bg(portable_terminal_backdrop_color)
-            });
+            .min_h_0();
 
         if show_left_panel {
             let mut left_sidebar = div()
@@ -814,7 +808,7 @@ impl Render for ConWorkspace {
                 .flex_shrink_0()
                 .overflow_hidden()
                 .occlude()
-                .bg(elevated_panel_surface_color);
+                .bg(top_bar_surface_color);
             if show_vertical_tabs {
                 left_sidebar = left_sidebar.child(
                     div()

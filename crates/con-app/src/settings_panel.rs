@@ -4258,7 +4258,7 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(slider_row(
                             "Terminal Glass",
-                            "How much of the desktop shows through the terminal.",
+                            "Shared opacity for the terminal, tab bar, sidebar, and input bar.",
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
@@ -4269,7 +4269,7 @@ impl SettingsPanel {
                             if cfg!(target_os = "linux") {
                                 "Disabled on Linux until rounded compositor blur regions are available."
                             } else {
-                                "Blur the desktop behind transparent terminal surfaces."
+                                "Blur the desktop behind the terminal and window chrome."
                             },
                             {
                                 let terminal_blur_supported = Self::terminal_blur_supported();
@@ -4295,8 +4295,8 @@ impl SettingsPanel {
                         mobile))
                         .child(row_separator(theme))
                         .child(slider_row(
-                            "Window Chrome",
-                            "Opacity for tabs, panels, and window controls.",
+                            "Panels and Popups",
+                            "Independent opacity for agent panels, popups, and selection surfaces.",
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,

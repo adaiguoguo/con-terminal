@@ -2059,13 +2059,39 @@ impl GhosttyView {
         let Some(host_view) = self.host_view else {
             return;
         };
+        let Some(appearance) = self.app.native_appearance() else {
+            return;
+        };
+        let radius = if appearance.background_opacity < 1.0 {
+            i32::from(appearance.background_blur.max(0))
+        } else {
+            0
+        };
+
+        // The same window-wide API used by Ghostty's embedded implementation.
+        // Apply zero explicitly when disabling blur or becoming opaque; its
+        // convenience function returns early in the latter case. Never pass
+        // Liquid Glass's negative material sentinels as a numeric radius.
+        unsafe extern "C" {
+            fn CGSDefaultConnectionForThread() -> *mut c_void;
+            fn CGSSetWindowBackgroundBlurRadius(
+                connection: *mut c_void,
+                window: usize,
+                radius: i32,
+            ) -> i32;
+        }
 
         unsafe {
             let nswindow: id = msg_send![host_view, window];
             if nswindow.is_null() {
                 return;
             }
-            ffi::ghostty_set_window_background_blur(self.app.raw(), nswindow as *mut c_void);
+            let number: usize = msg_send![nswindow, windowNumber];
+            let result =
+                CGSSetWindowBackgroundBlurRadius(CGSDefaultConnectionForThread(), number, radius);
+            if result != 0 {
+                log::warn!("Could not apply native window blur: {result}");
+            }
         }
     }
 

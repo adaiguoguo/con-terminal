@@ -175,7 +175,6 @@ pub struct InputBar {
     inline_suggestion_source: Option<SuggestionSource>,
     path_completion_candidates: Vec<String>,
     path_completion_selection: usize,
-    ui_opacity: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -475,7 +474,6 @@ impl InputBar {
             inline_suggestion_source: None,
             path_completion_candidates: Vec::new(),
             path_completion_selection: 0,
-            ui_opacity: 0.90,
             _subscriptions,
         }
     }
@@ -970,10 +968,6 @@ impl InputBar {
                 s.focus(window, cx);
             }
         });
-    }
-
-    pub fn set_ui_opacity(&mut self, opacity: f32) {
-        self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
     fn move_cursor_to_line_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1676,7 +1670,8 @@ impl Render for InputBar {
             .w_full()
             .flex()
             .flex_col()
-            .bg(theme.title_bar.opacity(self.ui_opacity))
+            // The workspace owns the background, including the reserved slot
+            // during show/hide. Painting it here too doubles the glass alpha.
             .font_family(theme.font_family.clone())
             .text_size(input_text_size)
             // ── Flat container ──

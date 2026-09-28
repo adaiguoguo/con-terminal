@@ -56,7 +56,6 @@ impl ConWorkspace {
         let tab_accent_inactive_hover_alpha = config.appearance.tab_accent_inactive_hover_alpha;
         let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
         sidebar.update(cx, |s, cx| {
-            s.set_ui_opacity(effective_ui_opacity, cx);
             s.set_tab_accent_alphas(
                 tab_accent_inactive_alpha,
                 tab_accent_inactive_hover_alpha,
@@ -380,7 +379,6 @@ impl ConWorkspace {
             panel.set_recent_inputs(initial_recent_inputs.clone(), cx);
         });
         input_bar.update(cx, |bar, cx| {
-            bar.set_ui_opacity(effective_ui_opacity);
             bar.set_recent_commands(initial_recent_inputs, cx);
         });
         sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));

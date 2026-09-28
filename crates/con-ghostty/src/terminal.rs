@@ -61,6 +61,9 @@ pub struct NativeAppearance {
     pub palette: [[u8; 3]; 256],
     pub font_size: f32,
     pub background_opacity: f64,
+    /// Ghostty's i16 C representation: a nonnegative radius, or a negative
+    /// sentinel for a native-app Liquid Glass material.
+    pub background_blur: i16,
 }
 
 impl TerminalColors {
@@ -507,6 +510,7 @@ fn effective_appearance(config: ffi::ghostty_config_t) -> Result<NativeAppearanc
         palette: palette.colors.map(|color| [color.r, color.g, color.b]),
         font_size: unsafe { get(config, "font-size")? },
         background_opacity: unsafe { get(config, "background-opacity")? },
+        background_blur: unsafe { get(config, "background-blur")? },
     })
 }
 
@@ -1011,6 +1015,16 @@ impl GhosttyApp {
             &GhosttyConfigPatch::default(),
         )?;
         let effective = effective_appearance(config.0)?;
+        if effective.background_blur < 0
+            && self.effective_appearance.lock().as_ref().is_none_or(|previous| {
+                previous.background_blur != effective.background_blur
+            })
+        {
+            log::warn!(
+                "Liquid Glass background-blur is not supported by Con; using unblurred \
+                 transparency. Use a numeric background-blur for window blur."
+            );
+        }
         *self.effective_appearance.lock() = Some(effective.clone());
         unsafe { ffi::ghostty_app_update_config(self.app, config.0) };
         // Ghostty checks the effective native clipboard-write policy before
@@ -2694,6 +2708,26 @@ mod tests {
         assert_eq!(reloaded.font_size, 17.0);
         assert_eq!(reloaded.background_opacity, 0.75);
         assert_eq!(reloaded.foreground, [0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn native_blur_resolves_includes_aliases_and_glass_materials() {
+        let (_cleanup, root) = temp_test_dir("con-native-blur-test");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("blur.conf"), "background-blur = 37\n").unwrap();
+        for (text, expected) in [
+            ("background-blur = false\n", 0),
+            ("config-file = blur.conf\n", 37),
+            ("background-blur = macos-glass-regular\n", -1),
+            ("background-blur = macos-glass-clear\n", -2),
+            (
+                "background-blur = macos-glass-regular\nbackground-blur-radius = 70\n",
+                70,
+            ),
+        ] {
+            let effective = super::validate_native_config(text, &root).unwrap();
+            assert_eq!(effective.background_blur, expected, "{text}");
+        }
     }
 
     #[test]
