@@ -953,9 +953,37 @@ impl ConWorkspace {
         )
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn on_terminal_file_requested(
+        &mut self,
+        source: &Entity<GhosttyView>,
+        link: &crate::terminal_file_link::TerminalFileLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Ignore stale/background events rather than opening in an unrelated tab.
+        if self.tabs.get(self.active_tab).is_some_and(|tab| {
+            tab.pane_tree
+                .pane_id_for_entity(source.entity_id())
+                .is_some()
+        }) {
+            self.open_path_at_in_active_editor(link.path.clone(), link.position, window, cx);
+        }
+    }
+
     pub(super) fn open_path_in_active_editor(
         &mut self,
         path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_path_at_in_active_editor(path, None, window, cx);
+    }
+
+    pub(crate) fn open_path_at_in_active_editor(
+        &mut self,
+        path: PathBuf,
+        position: Option<(usize, usize)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1015,7 +1043,7 @@ impl ConWorkspace {
         self.tabs[active_tab].pane_tree.focus_pane(pane_id);
         let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
         editor_view.update(cx, |editor: &mut EditorView, cx| {
-            editor.open_file(path.clone(), cx);
+            editor.open_file_at(path.clone(), position, cx);
         });
         editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);

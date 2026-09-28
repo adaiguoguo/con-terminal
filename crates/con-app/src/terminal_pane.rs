@@ -467,6 +467,13 @@ pub fn subscribe_terminal_pane(
             .detach();
         view.sync_terminal_focus(window, cx);
     });
+    #[cfg(target_os = "macos")]
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_file_requested,
+    )
+    .detach();
     cx.subscribe_in(
         &pane.entity,
         window,

@@ -511,6 +511,7 @@ pub struct EditorView {
     cursor_blink: Option<Task<()>>,
     selection_anchor: Option<CursorPosition>,
     content_bounds: Option<Bounds<Pixels>>,
+    pending_source_scroll: Option<u64>,
     focus_handle: FocusHandle,
     metrics: EditorMetrics,
     lsp_clients: HashMap<PathBuf, LspClient>,
@@ -540,6 +541,7 @@ impl EditorView {
             cursor_blink: None,
             selection_anchor: None,
             content_bounds: None,
+            pending_source_scroll: None,
             focus_handle: cx.focus_handle(),
             metrics: EditorMetrics::from_terminal_font_size(font_size),
             lsp_clients: HashMap::new(),
@@ -570,12 +572,24 @@ impl EditorView {
     /// Load a file from disk into the editor pane. If the file is already open,
     /// it becomes the active editor tab; otherwise a new editor tab is appended.
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_file_at(path, None, cx);
+    }
+
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        position: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) {
         self.open_generation = self.open_generation.wrapping_add(1);
         let generation = self.open_generation;
-        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+        if let Some(index) = self.tabs.iter().position(|tab| {
+            tab.path == path || tab.path.canonicalize().ok().as_ref() == Some(&path)
+        }) {
             self.active_tab = index;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
+            self.reveal_source_position(position);
             cx.emit(ActiveFileChanged);
             cx.notify();
             return;
@@ -611,6 +625,9 @@ impl EditorView {
                             activate,
                         );
                         this.ensure_lsp_for_path(&path);
+                        if activate {
+                            this.reveal_source_position(position);
+                        }
                         if apply.active_file_changed {
                             cx.emit(ActiveFileChanged);
                         }
@@ -630,6 +647,28 @@ impl EditorView {
             });
         })
         .detach();
+    }
+
+    fn reveal_source_position(&mut self, position: Option<(usize, usize)>) {
+        let Some((line, column)) = position else {
+            return;
+        };
+        let Some(tab) = self.active_tab_mut() else {
+            return;
+        };
+        if tab.kind == EditorTabKind::Image {
+            return;
+        }
+        tab.preview = false;
+        let row = line
+            .saturating_sub(1)
+            .min(tab.buffer.lines().len().saturating_sub(1));
+        let text = &tab.buffer.lines()[row];
+        let byte = Self::byte_offset_for_visual_column(text, column.saturating_sub(1));
+        self.set_cursor(row, byte);
+        // The first content layout may not exist yet. Retry once after the
+        // actual viewport has been measured, including horizontal scrolling.
+        self.pending_source_scroll = Some(self.open_generation);
     }
 
     fn open_file_from_content_with_activation(
@@ -1196,8 +1235,16 @@ impl EditorView {
         event.button == MouseButton::Left && event.click_count == 2 && !event.modifiers.shift
     }
 
-    fn update_content_bounds(&mut self, bounds: Bounds<Pixels>) {
+    fn update_content_bounds(&mut self, bounds: Bounds<Pixels>) -> bool {
         self.content_bounds = Some(bounds);
+        if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+            return false;
+        }
+        if self.pending_source_scroll.take() == Some(self.open_generation) {
+            self.scroll_cursor_into_view();
+            return true;
+        }
+        false
     }
 
     fn point_hits_scrollbar(&self, point: Point<Pixels>) -> bool {
@@ -2246,12 +2293,16 @@ impl Render for EditorView {
                 }
             }))
             .key_context("EditorView")
-            .on_children_prepainted(move |bounds_list, _window, cx| {
+            .on_children_prepainted(move |bounds_list, window, cx| {
                 let Some(bounds) = bounds_list.get(1).copied() else {
                     return;
                 };
                 if let Some(view) = view_handle.upgrade() {
-                    view.update(cx, |this, _cx| this.update_content_bounds(bounds));
+                    if view.update(cx, |this, _cx| this.update_content_bounds(bounds)) {
+                        window.on_next_frame(move |_window, cx| {
+                            view.update(cx, |_this, cx| cx.notify());
+                        });
+                    }
                 }
             })
             .on_mouse_down(
@@ -2982,6 +3033,140 @@ mod tests {
             }
         }
         !crc
+    }
+
+    #[gpui::test]
+    fn terminal_file_location_applies_after_load_and_on_reopen(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("location.txt");
+        std::fs::write(&path, "first\n中文abc\nlast").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_file_at(path.clone(), Some((2, 3)), cx)
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert_eq!(view.tabs.len(), 1);
+            assert_eq!(view.tabs[0].buffer.cursor(), CursorPosition::new(1, 6));
+            view.tabs[0].buffer.insert_text("edited");
+            view.open_file_at(path.clone(), Some((99, 99)), cx);
+            assert_eq!(view.tabs.len(), 1);
+            assert!(view.tabs[0].buffer.is_dirty());
+            assert_eq!(view.tabs[0].buffer.cursor(), CursorPosition::new(2, 4));
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_file_location_newest_request_wins(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "first\nsecond").unwrap();
+        std::fs::write(&second, "abc\nxyz").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_file_at(first, Some((2, 1)), cx);
+            view.open_file_at(second.clone(), Some((1, 3)), cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, _cx| {
+            assert_eq!(view.active_path(), Some(second.as_path()));
+            assert_eq!(
+                view.active_tab_ref().unwrap().buffer.cursor(),
+                CursorPosition::new(0, 2)
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    fn terminal_file_location_reuses_dirty_symlink_buffer(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("real.txt");
+        let alias = dir.path().join("alias.txt");
+        std::fs::write(&path, "original").unwrap();
+        std::os::unix::fs::symlink(&path, &alias).unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| view.open_file(alias, cx));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            view.active_tab_mut().unwrap().buffer.insert_text("unsaved");
+            view.open_file_at(path.canonicalize().unwrap(), Some((1, 2)), cx);
+            assert_eq!(view.tabs.len(), 1);
+            assert_eq!(view.tabs[0].buffer.text(), "unsavedoriginal");
+            assert!(view.tabs[0].buffer.is_dirty());
+        });
+    }
+
+    #[gpui::test]
+    fn source_scroll_waits_for_first_layout_and_runs_once(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, _cx| {
+            view.open_file_from_content_with_activation(
+                PathBuf::from("long.txt"),
+                "a".repeat(200)
+                    .lines()
+                    .cycle()
+                    .take(250)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                true,
+            );
+            view.reveal_source_position(Some((200, 180)));
+            assert_eq!(view.tabs[0].buffer.cursor(), CursorPosition::new(199, 179));
+            assert_eq!(view.content_bounds, None);
+            assert_eq!(view.pending_source_scroll, Some(view.open_generation));
+            assert!(!view.update_content_bounds(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(0.0), px(0.0))
+            )));
+            let bounds = Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(300.0), px(200.0)),
+            );
+            assert!(view.update_content_bounds(bounds));
+            assert!(view.scroll_handle.offset().x < px(0.0));
+            assert_eq!(view.pending_source_scroll, None);
+            assert!(!view.update_content_bounds(bounds));
+            view.reveal_source_position(Some((10, 1)));
+            view.open_generation += 1;
+            assert!(!view.update_content_bounds(bounds));
+        });
+    }
+
+    #[gpui::test]
+    fn source_scroll_makes_line_200_visible_in_new_editor(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            let mut view = EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx);
+            view.open_file_from_content_with_activation(
+                PathBuf::from("long.txt"),
+                (1..=300)
+                    .map(|n| format!("line {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                true,
+            );
+            view.reveal_source_position(Some((200, 1)));
+            view
+        });
+        cx.refresh().unwrap();
+        // Test windows have no platform frame loop. Deliver the frame queued
+        // after the first content layout so the list consumes its scroll request.
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        view.read_with(cx, |view, _cx| {
+            let bounds = view.content_bounds.expect("editor content laid out");
+            let offset = f32::from(view.scroll_handle.offset().y);
+            let top = 199.0 * view.metrics.line_height + offset;
+            assert!(
+                top >= -1.0
+                    && top + view.metrics.line_height <= f32::from(bounds.size.height) + 1.0,
+                "line 200 outside viewport: top={top}, bounds={bounds:?}, offset={offset}"
+            );
+            assert_eq!(view.pending_source_scroll, None);
+        });
     }
 
     #[gpui::test]
