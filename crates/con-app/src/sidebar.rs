@@ -1000,8 +1000,12 @@ impl SessionSidebar {
 
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
-            let active_bg = elevated_surface(theme, self.ui_opacity);
-            let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
+            // Selection must read without the accent stripe. Overlay the shared
+            // base rather than making the same background more opaque.
+            let active_bg = theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.24 } else { 0.12 });
+            let hover_bg = theme.foreground.opacity(0.04);
             // Drop indicator — a 2px primary-color line above this
             // pill if drop_slot == i, or below the last pill if
             // drop_slot == N. Both states share the same indicator
