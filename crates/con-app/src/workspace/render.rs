@@ -755,13 +755,22 @@ impl Render for ConWorkspace {
             };
             terminal_area = terminal_area.child(
                 div()
+                    .relative()
                     .overflow_hidden()
                     .h(px(input_bar_height))
                     .flex_shrink_0()
                     .bg(input_bar_surface_color)
-                    // Keep the existing content inset, but let the shared
-                    // translucent base show through instead of an opaque line.
                     .pt(px(1.0))
+                    // Separate output from input without adding another base fill.
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h(px(1.0))
+                            .bg(theme.foreground.opacity(0.10 * input_bar_content_opacity)),
+                    )
                     .child(
                         div()
                             .min_h(px((input_bar_height - 1.0).max(0.0)))
