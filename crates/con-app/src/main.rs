@@ -474,27 +474,6 @@ fn apply_linux_x11_shape(
     })
 }
 
-#[cfg(target_os = "macos")]
-fn should_use_macos_window_glass_backdrop(blur: bool, effective_opacity: f32) -> bool {
-    blur && effective_opacity < 0.999
-}
-
-#[cfg(target_os = "macos")]
-pub fn set_macos_window_glass_backdrop(window: &mut Window, blur: bool, effective_opacity: f32) {
-    if !supports_transparent_main_window() {
-        window.set_background_appearance(WindowBackgroundAppearance::Opaque);
-        return;
-    }
-
-    window.set_background_appearance(
-        if should_use_macos_window_glass_backdrop(blur, effective_opacity) {
-            WindowBackgroundAppearance::Blurred
-        } else {
-            WindowBackgroundAppearance::Transparent
-        },
-    );
-}
-
 #[cfg(target_os = "windows")]
 fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -560,10 +539,10 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 // and any remaining targets still fall back to `stub_view.rs`. See the
 // platform docs under `docs/impl/`.
 
-fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
+fn default_window_options(cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
     let window_decorations = default_window_decorations();
-    let window_background = default_window_background(config, transparent);
+    let window_background = default_window_background(transparent);
 
     WindowOptions {
         window_bounds: Some(default_workspace_window_bounds(cx)),
@@ -608,8 +587,8 @@ fn quick_terminal_bounds(cx: &mut App) -> WindowBounds {
 }
 
 #[cfg(target_os = "macos")]
-fn quick_terminal_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
-    let mut options = default_window_options(config, cx);
+fn quick_terminal_options(cx: &mut App) -> WindowOptions {
+    let mut options = default_window_options(cx);
     options.window_bounds = Some(quick_terminal_bounds(cx));
     // Avoid a transient GPUI titlebar before the AppKit trampoline
     // normalizes the window to borderless.
@@ -617,39 +596,14 @@ fn quick_terminal_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
     options
 }
 
-fn default_window_background(
-    config: &con_core::Config,
-    transparent: bool,
-) -> WindowBackgroundAppearance {
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let _ = config;
-
+fn default_window_background(transparent: bool) -> WindowBackgroundAppearance {
     if !transparent {
         return WindowBackgroundAppearance::Opaque;
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let effective_opacity =
-            ConWorkspace::effective_terminal_opacity(config.appearance.terminal_opacity);
-        if should_use_macos_window_glass_backdrop(
-            config.appearance.terminal_blur,
-            effective_opacity,
-        ) {
-            return WindowBackgroundAppearance::Blurred;
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let _ = config;
-        WindowBackgroundAppearance::Transparent
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        WindowBackgroundAppearance::Transparent
-    }
+    // macOS blur is applied once to the NSWindow from Ghostty's effective
+    // configuration. GPUI's NSVisualEffectView would add a second material.
+    WindowBackgroundAppearance::Transparent
 }
 
 fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
@@ -751,9 +705,9 @@ fn open_con_window_with_startup(
         return;
     }
     #[cfg(target_os = "linux")]
-    let mut window_options = default_window_options(&config, cx);
+    let mut window_options = default_window_options(cx);
     #[cfg(not(target_os = "linux"))]
-    let window_options = default_window_options(&config, cx);
+    let window_options = default_window_options(cx);
     #[cfg(target_os = "linux")]
     if let Some(startup) = startup.as_ref() {
         if let Some(app_id) = startup.app_id.as_ref() {
@@ -832,7 +786,7 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
         cx.activate(true);
         return;
     }
-    let window_options = quick_terminal_options(&config, cx);
+    let window_options = quick_terminal_options(cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();

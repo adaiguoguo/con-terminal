@@ -101,6 +101,26 @@ not a promise of identical behavior elsewhere. In particular, native Ghostty key
 actions do not automatically become equivalent Con host-action shortcuts; configure
 those with `con.keybindings.*` or Settings.
 
+### Terminal and chrome backgrounds
+
+The tab bar, vertical tab sidebar, and input bar share the terminal's effective
+background color and opacity. Each base is painted once, with no foreground tint
+or additional UI-opacity curve. On macOS the values come from libghostty after
+theme lookup, includes, explicit overrides, and color-scheme selection.
+
+`con.appearance.ui_opacity` remains supported for independent panels, popups, and
+selection surfaces (Settings: **Panels and Popups**). It no longer controls those
+three terminal-adjacent bases. No configuration migration is required.
+
+On macOS, `background-blur` controls one window-wide native blur; GPUI does not add
+a separate visual-effect material. `background-blur-radius` is an old alias of
+the same setting, not an additional effect. If both are present, the later entry
+wins. Prefer a single `background-blur = 70` (or `false`). Liquid Glass values
+such as `macos-glass-regular` require native-app window integration that Con does
+not yet provide: Con logs a warning and uses unblurred transparency instead.
+Background images and per-cell/OSC background overrides remain terminal content;
+they are not copied into the surrounding chrome.
+
 ## Import and export
 
 ### First launch (macOS)

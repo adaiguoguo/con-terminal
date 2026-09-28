@@ -1137,11 +1137,8 @@ impl ConWorkspace {
         });
         self.config.appearance.agent_avatar =
             con_core::config::sanitize_agent_avatar(&appearance_config.agent_avatar);
-        self.input_bar
-            .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
-        self.sidebar
-            .update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         self.sidebar.update(cx, |s, cx| {
+            s.set_ui_opacity(effective_ui_opacity, cx);
             s.set_tab_accent_alphas(
                 self.tab_accent_inactive_alpha,
                 self.tab_accent_inactive_hover_alpha,
@@ -1209,11 +1206,6 @@ impl ConWorkspace {
                     terminal.sync_window_background_blur(cx);
                 }
             }
-            crate::set_macos_window_glass_backdrop(
-                _window,
-                self.terminal_blur,
-                self.terminal_opacity,
-            );
         }
         #[cfg(not(target_os = "macos"))]
         let colors = theme_to_ghostty_colors(_theme);

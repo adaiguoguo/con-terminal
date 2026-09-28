@@ -125,6 +125,7 @@ impl ConWorkspace {
                 &effective.palette,
             );
             self.terminal_opacity = effective.background_opacity as f32;
+            self.sync_terminal_surface_appearance(&self.terminal_theme, window, cx);
             self.sync_gpui_theme_appearance(&self.terminal_theme.clone(), window, cx);
             cx.notify();
         }

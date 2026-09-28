@@ -432,7 +432,7 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "info.background": "{cyan_hex}",
         "info.foreground": "{info_fg_hex}",
 
-        "title_bar.background": "{surface1_hex}",
+        "title_bar.background": "{bg_hex}",
         "title_bar.border": "{border}",
 
         "sidebar.background": "{surface1_hex}",
@@ -739,5 +739,23 @@ mod tests {
 
         assert_eq!(json["themes"][0]["mode"], "dark");
         assert_eq!(theme.ansi, palette);
+    }
+
+    #[test]
+    fn terminal_adjacent_chrome_uses_native_background_without_tint() {
+        for (background, expected) in [
+            (Color::rgb(0xfa, 0xf9, 0xf5), "#FAF9F5"),
+            (Color::rgb(0x12, 0x28, 0x35), "#122835"),
+        ] {
+            let mut theme = TerminalTheme::paper_light();
+            theme.background = background;
+            let json: serde_json::Value =
+                serde_json::from_str(&generate_gpui_theme_json(&theme)).unwrap();
+            let colors = &json["themes"][0]["colors"];
+            assert_eq!(colors["title_bar.background"], expected);
+            assert_eq!(colors["background"], expected);
+            // Selection surfaces still need their own visual hierarchy.
+            assert_ne!(colors["secondary.background"], expected);
+        }
     }
 }

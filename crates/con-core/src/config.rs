@@ -144,6 +144,8 @@ impl Default for TerminalConfig {
 pub struct AppearanceConfig {
     pub terminal_opacity: f32,
     pub terminal_blur: bool,
+    /// Independent panel/popup opacity. Terminal-adjacent base surfaces follow
+    /// the terminal's effective background-opacity instead.
     pub ui_opacity: f32,
     pub ui_font_family: String,
     pub ui_font_size: f32,
