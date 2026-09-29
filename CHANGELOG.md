@@ -8,6 +8,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Tabs**
+
+- Tabs sit more naturally on transparent title bars. The close button has a
+  larger click target, and the title bar no longer flashes a dark strip when
+  the window returns to one tab. _(PR
+  [#422](https://github.com/nowledge-co/con-terminal/pull/422) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Command Palette**
 
 - Search results remain fully visible and scrollable instead of collapsing below
