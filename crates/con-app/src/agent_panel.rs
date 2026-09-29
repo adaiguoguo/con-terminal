@@ -5152,11 +5152,8 @@ impl Render for AgentPanel {
             let inline_input = self.inline_input_state.clone().unwrap();
 
             let has_text = self.inline_input_has_text;
-            let has_skills = self.inline_input_has_skills;
             let inline_control_size = mono_space_px(theme, 24.0);
             let inline_input_text_size = mono_px(theme, 13.0);
-
-            let can_send = has_text && !has_skills;
 
             // Keep the inline action at the same visual weight as the main bar.
             let send_button = div()
@@ -5168,13 +5165,13 @@ impl Render for AgentPanel {
                 .rounded(mono_space_px(theme, 12.0))
                 .cursor_pointer()
                 .flex_shrink_0()
-                .bg(if can_send {
+                .bg(if has_text {
                     theme.primary.opacity(0.14)
                 } else {
                     theme.transparent
                 })
                 .hover(|s| {
-                    if can_send {
+                    if has_text {
                         s.bg(theme.primary.opacity(0.22))
                     } else {
                         s.bg(theme.foreground.opacity(0.06))
@@ -5196,7 +5193,7 @@ impl Render for AgentPanel {
                     svg()
                         .path("phosphor/arrow-up.svg")
                         .size(mono_space_px(theme, 12.0))
-                        .text_color(if can_send {
+                        .text_color(if has_text {
                             theme.primary.opacity(0.92)
                         } else {
                             theme.muted_foreground.opacity(0.62)
