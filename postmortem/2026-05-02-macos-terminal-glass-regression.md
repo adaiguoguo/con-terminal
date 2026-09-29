@@ -52,6 +52,12 @@ Short reservation guards keep the previous chrome slot alive, empty, and glass-c
 
 Pane dividers are visible again using a subtle terminal-derived foreground tint precomposed over the terminal background. The divider pixel stays opaque enough to avoid a clear gap, but it does not become a heavy bar.
 
+The agent panel's static resize divider is different from a native-view gap: its
+parent already paints the panel surface. Painting another opaque terminal-colored
+pixel there created a dark line, especially with Terminal Glass enabled. Leave
+that child transparent, keep its hit area and hover affordance, and retain the
+separate transition/drag covers for actual GPUI/AppKit layout gaps.
+
 ## Current Status
 
 The current fix restores Terminal Glass and blur on modern macOS, keeps the Monterey fallback separate, and avoids the obvious opaque-animation blink. Manual testing shows the leak frequency is much lower, with the remaining rare case most often seen during extremely rapid input-bar toggles.

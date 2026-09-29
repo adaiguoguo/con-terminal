@@ -1257,6 +1257,7 @@ impl Render for InputBar {
             )
             .accessibility_label(format!("{}; switch mode", self.mode.tooltip()))
             .tooltip_with_action(self.mode.tooltip(), &crate::CycleInputMode, None)
+            .debug_selector(|| "command-mode-toggle".into())
             .tab_stop(false)
             .size(control_size)
             .w(control_size)
@@ -1352,23 +1353,28 @@ impl Render for InputBar {
         };
 
         // ── Send button — inside container, right edge ──
+        let submit_tint = match self.mode {
+            InputMode::Smart => theme.foreground,
+            InputMode::Shell => theme.success,
+            InputMode::Agent => theme.primary,
+        };
         let send_button = Button::new("send-button")
             .custom(
                 ButtonCustomVariant::new(cx)
                     .color(if has_text {
-                        theme.primary
+                        submit_tint.opacity(0.14)
                     } else {
-                        theme.foreground.opacity(0.055)
+                        theme.transparent
                     })
                     .hover(if has_text {
-                        theme.primary_hover
+                        submit_tint.opacity(0.22)
                     } else {
-                        theme.foreground.opacity(0.075)
+                        theme.foreground.opacity(0.06)
                     })
                     .active(if has_text {
-                        theme.primary_hover
+                        submit_tint.opacity(0.28)
                     } else {
-                        theme.foreground.opacity(0.10)
+                        theme.foreground.opacity(0.08)
                     }),
             )
             .accessibility_label("Submit input")
@@ -1391,9 +1397,9 @@ impl Render for InputBar {
                     .path("phosphor/arrow-up.svg")
                     .size(mono_space_px(theme, 13.0))
                     .text_color(if has_text {
-                        theme.primary_foreground
+                        submit_tint.opacity(0.92)
                     } else {
-                        theme.muted_foreground.opacity(0.44)
+                        theme.muted_foreground.opacity(0.62)
                     }),
             );
 
@@ -1408,12 +1414,8 @@ impl Render for InputBar {
             InputMode::Agent => mono_px(theme, 14.0),
             _ => mono_px(theme, 13.0),
         };
-        let input_line_height = match self.mode {
-            InputMode::Agent => rems(1.15),
-            _ => rems(1.25),
-        };
-        // All modes share the same centered row. Agent mode used to apply a
-        // negative offset, which made its placeholder visibly sit too high.
+        // Switching between UI and mono fonts must not change the line box.
+        let input_line_height = rems(1.25);
         let input_vertical_offset = px(0.0);
         let show_inline_suggestion = self.mode != InputMode::Agent
             && input_cursor == input_value.len()
@@ -1829,12 +1831,13 @@ mod tests {
 
         con_core::release_channel::init();
         cx.update(gpui_component::init);
+        let mut mode_row_top = [None, None];
         for mode in [
             super::InputMode::Smart,
             super::InputMode::Shell,
             super::InputMode::Agent,
         ] {
-            for cached in [false, true] {
+            for (cache_index, cached) in [false, true].into_iter().enumerate() {
                 let (_, view) = cx.add_window_view(|window, cx| {
                     let bar = cx.new(|cx| {
                         let mut bar = InputBar::new(window, cx);
@@ -1851,6 +1854,15 @@ mod tests {
                     let send = view
                         .debug_bounds("command-send-button")
                         .expect("send button");
+                    let mode_toggle = view
+                        .debug_bounds("command-mode-toggle")
+                        .expect("mode toggle");
+                    match mode_row_top[cache_index] {
+                        Some(top) => {
+                            assert_eq!(mode_toggle.top(), top, "{mode:?}, cached={cached}")
+                        }
+                        None => mode_row_top[cache_index] = Some(mode_toggle.top()),
+                    }
                     assert!(
                         input.size.width > px(width * 0.5),
                         "{mode:?}, cached={cached}: {input:?}"

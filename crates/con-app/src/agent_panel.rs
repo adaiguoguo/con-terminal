@@ -3966,8 +3966,8 @@ impl AgentPanel {
                 div()
                     .px(ui_space_px(theme, 6.0))
                     .py(ui_space_px(theme, 8.0))
-                    .text_size(ui_px(theme, 12.5))
-                    .text_color(theme.muted_foreground.opacity(0.40))
+                    .text_size(ui_px(theme, 13.0))
+                    .text_color(theme.foreground.opacity(0.64))
                     .line_height(ui_px(theme, 19.0))
                     .child(msg.content.clone()),
             );
@@ -4915,7 +4915,9 @@ impl Render for AgentPanel {
             .size_full()
             .min_h_0()
             .items_stretch()
-            .bg(theme.title_bar.opacity(self.ui_opacity))
+            // The workspace paints the panel glass once. A second translucent
+            // fill here makes the entire side panel look nearly opaque.
+            .bg(theme.transparent)
             .font_family(theme.font_family.clone())
             .text_size(theme.font_size)
             .child(header)
@@ -5150,11 +5152,10 @@ impl Render for AgentPanel {
             let inline_input = self.inline_input_state.clone().unwrap();
 
             let has_text = self.inline_input_has_text;
-            let has_skills = self.inline_input_has_skills;
             let inline_control_size = mono_space_px(theme, 24.0);
             let inline_input_text_size = mono_px(theme, 13.0);
 
-            // Send button — circular, matches main input bar
+            // Keep the inline action at the same visual weight as the main bar.
             let send_button = div()
                 .id("inline-send-btn")
                 .flex()
@@ -5164,16 +5165,16 @@ impl Render for AgentPanel {
                 .rounded(mono_space_px(theme, 12.0))
                 .cursor_pointer()
                 .flex_shrink_0()
-                .bg(if has_text && !has_skills {
-                    theme.primary
+                .bg(if has_text {
+                    theme.primary.opacity(0.14)
                 } else {
-                    theme.muted.opacity(0.12)
+                    theme.transparent
                 })
                 .hover(|s| {
                     if has_text {
-                        s.bg(theme.primary_hover)
+                        s.bg(theme.primary.opacity(0.22))
                     } else {
-                        s.bg(theme.muted.opacity(0.18))
+                        s.bg(theme.foreground.opacity(0.06))
                     }
                 })
                 .on_mouse_down(
@@ -5192,10 +5193,10 @@ impl Render for AgentPanel {
                     svg()
                         .path("phosphor/arrow-up.svg")
                         .size(mono_space_px(theme, 12.0))
-                        .text_color(if has_text && !has_skills {
-                            theme.primary_foreground
+                        .text_color(if has_text {
+                            theme.primary.opacity(0.92)
                         } else {
-                            theme.muted_foreground.opacity(0.4)
+                            theme.muted_foreground.opacity(0.62)
                         }),
                 );
 
