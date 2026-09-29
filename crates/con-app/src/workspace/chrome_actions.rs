@@ -52,10 +52,6 @@ impl ConWorkspace {
         if !duration.is_zero() {
             self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
         }
-        #[cfg(target_os = "macos")]
-        if duration.is_zero() {
-            self.arm_input_bar_snap_guard(cx);
-        }
         self.input_bar_motion
             .set_target(if self.input_bar_visible { 1.0 } else { 0.0 }, duration);
         if self.input_bar_visible {
@@ -161,10 +157,6 @@ impl ConWorkspace {
         if !self.input_bar_visible {
             self.input_bar_visible = true;
             let duration = Self::terminal_adjacent_chrome_duration(true, 180, 180);
-            #[cfg(target_os = "macos")]
-            if duration.is_zero() {
-                self.arm_input_bar_snap_guard(cx);
-            }
             self.input_bar_motion.set_target(1.0, duration);
         }
 
@@ -438,10 +430,7 @@ impl ConWorkspace {
             self.tabs.push(tab);
         }
 
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
+        self.sync_tab_strip_motion();
 
         self.active_tab = first_new + imported_active;
         let incoming = std::mem::replace(

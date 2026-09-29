@@ -27,6 +27,14 @@ impl MotionValue {
     }
 
     pub fn set_target(&mut self, target: f32, duration: Duration) {
+        if duration.is_zero() {
+            self.current = target;
+            self.from = target;
+            self.target = target;
+            self.duration = duration;
+            self.started_at = None;
+            return;
+        }
         let current = self.current();
         self.current = current;
         self.from = current;
@@ -41,11 +49,12 @@ impl MotionValue {
     }
 
     pub fn restart(&mut self, from: f32, target: f32, duration: Duration) {
-        self.current = from;
-        self.from = from;
+        let start = if duration.is_zero() { target } else { from };
+        self.current = start;
+        self.from = start;
         self.target = target;
         self.duration = duration;
-        self.started_at = if (from - target).abs() > 0.001 {
+        self.started_at = if !duration.is_zero() && (from - target).abs() > 0.001 {
             Some(Instant::now())
         } else {
             None
@@ -130,5 +139,17 @@ mod tests {
         assert_eq!(motion.update(true, || requested.set(true)), 0.25);
         assert!(!motion.is_animating());
         assert!(!requested.get());
+    }
+
+    #[test]
+    fn zero_duration_never_reports_a_transition_frame() {
+        let mut motion = MotionValue::new(0.0);
+        motion.set_target(1.0, Duration::ZERO);
+        assert_eq!(motion.current(), 1.0);
+        assert!(!motion.is_animating());
+
+        motion.restart(1.0, 0.0, Duration::ZERO);
+        assert_eq!(motion.current(), 0.0);
+        assert!(!motion.is_animating());
     }
 }

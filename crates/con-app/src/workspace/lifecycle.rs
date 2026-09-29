@@ -854,15 +854,7 @@ impl ConWorkspace {
             #[cfg(target_os = "macos")]
             agent_panel_snap_guard_until: None,
             #[cfg(target_os = "macos")]
-            input_bar_snap_guard_until: None,
-            #[cfg(target_os = "macos")]
-            top_chrome_snap_guard_until: None,
-            #[cfg(target_os = "macos")]
             agent_panel_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            input_bar_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            top_chrome_release_cover_until: None,
             #[cfg(target_os = "linux")]
             linux_window_shape_signature: None,
             pending_create_pane_requests: Vec::new(),

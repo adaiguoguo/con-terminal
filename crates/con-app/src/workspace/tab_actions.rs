@@ -825,10 +825,7 @@ impl ConWorkspace {
         if self.active_tab >= insert_at {
             self.active_tab += 1;
         }
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
+        self.sync_tab_strip_motion();
         self.activate_tab(insert_at, window, cx);
         cx.notify();
     }
@@ -882,10 +879,7 @@ impl ConWorkspace {
         if self.active_tab >= insert_at {
             self.active_tab += 1;
         }
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
+        self.sync_tab_strip_motion();
         self.activate_tab(insert_at, window, cx);
 
         let editor_focus = editor_view.read(cx).focus_handle(cx).clone();

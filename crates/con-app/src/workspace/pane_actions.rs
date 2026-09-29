@@ -815,14 +815,12 @@ impl ConWorkspace {
             },
         );
 
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-            if Self::should_defer_top_chrome_refresh_when_tab_strip_appears() {
-                cx.on_next_frame(window, |_, _, cx| {
-                    cx.notify();
-                });
-            }
+        if self.sync_tab_strip_motion()
+            && Self::should_defer_top_chrome_refresh_when_tab_strip_appears()
+        {
+            cx.on_next_frame(window, |_, _, cx| {
+                cx.notify();
+            });
         }
 
         self.activate_tab(new_index, window, cx);

@@ -8,6 +8,22 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Tabs**
+
+- Tabs sit more naturally on transparent title bars. The close button has a
+  larger click target. On macOS, returning to one tab no longer resizes the
+  title bar and terminal, avoiding a dark strip during the change. _(PR
+  [#422](https://github.com/nowledge-co/con-terminal/pull/422) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Input bar and search**
+
+- On macOS, showing or hiding the input bar no longer leaves a brief dark
+  placeholder across the bottom of the terminal. The sidebar's file search
+  uses a single-line field with clearer type and compact match options. _(PR
+  [#422](https://github.com/nowledge-co/con-terminal/pull/422) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Command Palette**
 
 - Search results remain fully visible and scrollable instead of collapsing below

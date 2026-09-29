@@ -131,8 +131,19 @@ impl ConWorkspace {
     }
 
     pub(super) fn save_session(&self, cx: &App) {
+        let started = std::time::Instant::now();
         let session = self.snapshot_session(cx);
         let history = self.snapshot_global_history();
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(50) {
+            log::warn!(
+                target: "con::perf",
+                "session snapshot blocked UI for {:.1}ms (tabs={}, terminal_text={})",
+                elapsed.as_secs_f64() * 1000.0,
+                self.tabs.len(),
+                self.config.appearance.restore_terminal_text,
+            );
+        }
         if let Err(err) = self
             .session_save_tx
             .send(SessionSaveRequest::Save(session, history))

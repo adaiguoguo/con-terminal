@@ -20,7 +20,19 @@ const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
+#[cfg(target_os = "macos")]
+const TOP_BAR_TABS_HEIGHT: f32 = TOP_BAR_COMPACT_HEIGHT;
+#[cfg(not(target_os = "macos"))]
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
+#[cfg(target_os = "macos")]
+const TOP_BAR_TAB_HEIGHT: f32 = 24.0;
+#[cfg(not(target_os = "macos"))]
+const TOP_BAR_TAB_HEIGHT: f32 = 30.0;
+#[cfg(target_os = "macos")]
+const TAB_DROP_PREVIEW_TOP: f32 = 0.0;
+#[cfg(not(target_os = "macos"))]
+const TAB_DROP_PREVIEW_TOP: f32 = TOP_BAR_COMPACT_HEIGHT;
+const TAB_DROP_PREVIEW_HEIGHT: f32 = TOP_BAR_TABS_HEIGHT - TAB_DROP_PREVIEW_TOP;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
 const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
 #[cfg(target_os = "macos")]
@@ -216,15 +228,7 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     agent_panel_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
-    input_bar_snap_guard_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    top_chrome_snap_guard_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
     agent_panel_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    input_bar_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    top_chrome_release_cover_until: Option<Instant>,
     #[cfg(target_os = "linux")]
     linux_window_shape_signature: Option<(u32, u32, crate::LinuxWindowShapeRadii)>,
     /// Pending create-pane requests that need a window context to process.
