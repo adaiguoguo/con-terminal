@@ -1355,6 +1355,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "socket2",
+ "tempfile",
  "tokio",
  "tracing",
  "ttf-parser",

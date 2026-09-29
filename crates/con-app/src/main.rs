@@ -84,6 +84,8 @@ mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
 mod terminal_env;
+#[cfg(any(target_os = "macos", test))]
+mod terminal_file_link;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;
 mod terminal_keys;
