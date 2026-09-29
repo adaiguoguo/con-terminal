@@ -1352,23 +1352,28 @@ impl Render for InputBar {
         };
 
         // ── Send button — inside container, right edge ──
+        let submit_tint = match self.mode {
+            InputMode::Smart => theme.foreground,
+            InputMode::Shell => theme.success,
+            InputMode::Agent => theme.primary,
+        };
         let send_button = Button::new("send-button")
             .custom(
                 ButtonCustomVariant::new(cx)
                     .color(if has_text {
-                        theme.primary
+                        submit_tint.opacity(0.14)
                     } else {
-                        theme.foreground.opacity(0.055)
+                        theme.transparent
                     })
                     .hover(if has_text {
-                        theme.primary_hover
+                        submit_tint.opacity(0.22)
                     } else {
-                        theme.foreground.opacity(0.075)
+                        theme.foreground.opacity(0.06)
                     })
                     .active(if has_text {
-                        theme.primary_hover
+                        submit_tint.opacity(0.28)
                     } else {
-                        theme.foreground.opacity(0.10)
+                        theme.foreground.opacity(0.08)
                     }),
             )
             .accessibility_label("Submit input")
@@ -1391,9 +1396,9 @@ impl Render for InputBar {
                     .path("phosphor/arrow-up.svg")
                     .size(mono_space_px(theme, 13.0))
                     .text_color(if has_text {
-                        theme.primary_foreground
+                        submit_tint.opacity(0.92)
                     } else {
-                        theme.muted_foreground.opacity(0.44)
+                        theme.muted_foreground.opacity(0.62)
                     }),
             );
 
