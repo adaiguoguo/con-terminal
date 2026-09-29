@@ -181,10 +181,6 @@ impl ConWorkspace {
             self.save_session(cx);
         }
         let duration = Self::terminal_adjacent_chrome_duration(true, 180, 180);
-        #[cfg(target_os = "macos")]
-        if duration.is_zero() {
-            self.arm_input_bar_snap_guard(cx);
-        }
         self.input_bar_motion.set_target(1.0, duration);
         self.input_bar.focus_handle(cx).focus(window, cx);
         cx.notify();

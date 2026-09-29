@@ -56,6 +56,15 @@ Pane dividers are visible again using a subtle terminal-derived foreground tint 
 
 The current fix restores Terminal Glass and blur on modern macOS, keeps the Monterey fallback separate, and avoids the obvious opaque-animation blink. Manual testing shows the leak frequency is much lower, with the remaining rare case most often seen during extremely rapid input-bar toggles.
 
+September 2026 follow-up: the input bar's 160 ms reservation guard and 48 ms
+opaque release cover were themselves visible as a dark empty strip on each
+toggle. The macOS input bar now changes layout immediately; Ghostty's existing
+`on_layout` path applies the new native bounds and draws the surface in the
+same prepaint pass. This removes the deterministic dark strip, but rapid
+toggles with terminal glass still need manual validation for rare clear seams.
+Do not restore the full-width timer cover if a seam remains; investigate the
+GPUI/AppKit layout commit boundary instead.
+
 This is not a fully closed problem. The remaining gap is a native-layout transaction issue: GPUI chrome and embedded AppKit surface placement can still disagree for a frame under abusive repeated toggles. More timing overlays may reduce probability, but they risk reintroducing the same opacity and border regressions.
 
 ## TODO

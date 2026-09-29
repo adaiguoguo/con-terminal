@@ -228,11 +228,7 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     agent_panel_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
-    input_bar_snap_guard_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
     agent_panel_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    input_bar_release_cover_until: Option<Instant>,
     #[cfg(target_os = "linux")]
     linux_window_shape_signature: Option<(u32, u32, crate::LinuxWindowShapeRadii)>,
     /// Pending create-pane requests that need a window context to process.

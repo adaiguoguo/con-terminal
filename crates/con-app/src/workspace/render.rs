@@ -313,33 +313,20 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let (agent_panel_snap_guard_active, agent_panel_snap_guard_expired) =
             Self::snap_guard_state(&mut self.agent_panel_snap_guard_until, window);
-        #[cfg(target_os = "macos")]
-        let (input_bar_snap_guard_active, input_bar_snap_guard_expired) =
-            Self::snap_guard_state(&mut self.input_bar_snap_guard_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_snap_guard_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let input_bar_snap_guard_active = false;
         #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
             if agent_panel_snap_guard_expired && !self.agent_panel_open {
                 Self::extend_guard(&mut self.agent_panel_release_cover_until, release_cover);
             }
-            if input_bar_snap_guard_expired && !self.input_bar_visible {
-                Self::extend_guard(&mut self.input_bar_release_cover_until, release_cover);
-            }
         }
         #[cfg(target_os = "macos")]
         let agent_panel_release_cover_active =
             Self::snap_guard_active(&mut self.agent_panel_release_cover_until, window);
-        #[cfg(target_os = "macos")]
-        let input_bar_release_cover_active =
-            Self::snap_guard_active(&mut self.input_bar_release_cover_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_release_cover_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let input_bar_release_cover_active = false;
         #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
@@ -725,8 +712,7 @@ impl Render for ConWorkspace {
             );
         }
 
-        let input_bar_reserved_for_layout =
-            input_bar_progress > 0.01 || input_bar_snap_guard_active;
+        let input_bar_reserved_for_layout = input_bar_progress > 0.01;
 
         if input_bar_reserved_for_layout {
             let full_input_bar_height = self.input_bar.read(cx).rendered_height(cx).as_f32();
@@ -1413,30 +1399,6 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((left_panel_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)))
                     .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
-        if input_bar_snap_guard_active && self.input_bar_visible {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(px(terminal_content_left))
-                    .right(px(agent_panel_outer_width))
-                    .bottom(self.input_bar.read(cx).rendered_height(cx))
-                    .h(px(CHROME_MOTION_SEAM_OVERDRAW))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
-        if input_bar_release_cover_active {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(px(terminal_content_left))
-                    .right(px(agent_panel_outer_width))
-                    .bottom_0()
-                    .h(self.input_bar.read(cx).rendered_height(cx))
                     .bg(chrome_transition_seam_color),
             );
         }
