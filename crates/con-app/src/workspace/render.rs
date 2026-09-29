@@ -316,15 +316,10 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let (input_bar_snap_guard_active, input_bar_snap_guard_expired) =
             Self::snap_guard_state(&mut self.input_bar_snap_guard_until, window);
-        #[cfg(target_os = "macos")]
-        let (top_chrome_snap_guard_active, top_chrome_snap_guard_expired) =
-            Self::snap_guard_state(&mut self.top_chrome_snap_guard_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_snap_guard_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_snap_guard_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let top_chrome_snap_guard_active = false;
         #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
@@ -334,9 +329,6 @@ impl Render for ConWorkspace {
             if input_bar_snap_guard_expired && !self.input_bar_visible {
                 Self::extend_guard(&mut self.input_bar_release_cover_until, release_cover);
             }
-            if top_chrome_snap_guard_expired && !self.horizontal_tabs_visible() {
-                Self::extend_guard(&mut self.top_chrome_release_cover_until, release_cover);
-            }
         }
         #[cfg(target_os = "macos")]
         let agent_panel_release_cover_active =
@@ -344,15 +336,10 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let input_bar_release_cover_active =
             Self::snap_guard_active(&mut self.input_bar_release_cover_until, window);
-        #[cfg(target_os = "macos")]
-        let top_chrome_release_cover_active =
-            Self::snap_guard_active(&mut self.top_chrome_release_cover_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_release_cover_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_release_cover_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let top_chrome_release_cover_active = false;
         #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
@@ -979,11 +966,7 @@ impl Render for ConWorkspace {
         }
 
         // Top bar — compact titlebar for one tab, full strip for many
-        let top_bar_height = if top_chrome_snap_guard_active {
-            TOP_BAR_TABS_HEIGHT
-        } else {
-            self.current_top_bar_height()
-        };
+        let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
         let top_bar = self.render_top_bar(
@@ -1384,8 +1367,8 @@ impl Render for ConWorkspace {
                 tab_drag_preview_origin(
                     drag.current_pos,
                     preview_size,
-                    px(TOP_BAR_COMPACT_HEIGHT),
-                    px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT),
+                    px(TAB_DROP_PREVIEW_TOP),
+                    px(TAB_DROP_PREVIEW_HEIGHT),
                 )
             } else {
                 pane_drag_floating_preview_origin(drag.current_pos, preview_size)
@@ -1419,18 +1402,6 @@ impl Render for ConWorkspace {
                     .right_0()
                     .h(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(chrome_transition_seam_color),
-            );
-        }
-
-        if top_chrome_release_cover_active {
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(TOP_BAR_COMPACT_HEIGHT))
-                    .left(px(terminal_content_left))
-                    .right(px(agent_panel_outer_width))
-                    .h(px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT))
-                    .bg(top_bar_surface_color),
             );
         }
 

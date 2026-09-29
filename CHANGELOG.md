@@ -11,8 +11,8 @@ con is still pre-release, so entries may group related beta work while the produ
 **Tabs**
 
 - Tabs sit more naturally on transparent title bars. The close button has a
-  larger click target, and the title bar no longer flashes a dark strip when
-  the window returns to one tab. _(PR
+  larger click target. On macOS, returning to one tab no longer resizes the
+  title bar and terminal, avoiding a dark strip during the change. _(PR
   [#422](https://github.com/nowledge-co/con-terminal/pull/422) by
   [@wey-gu](https://github.com/wey-gu))_
 

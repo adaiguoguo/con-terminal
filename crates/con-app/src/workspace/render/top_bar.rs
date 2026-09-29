@@ -465,7 +465,7 @@ impl ConWorkspace {
                         // on_drag below. The dummy values avoid guessing tab
                         // geometry during render construction.
                         cursor_offset_y: px(0.0),
-                        top: px(TOP_BAR_COMPACT_HEIGHT),
+                        top: px(TAB_DROP_PREVIEW_TOP),
                         height: preview_size.height,
                         preview_height: preview_size.height,
                         cursor_offset_x: px(0.0),
@@ -493,7 +493,7 @@ impl ConWorkspace {
                     .max_w(px(220.0))
                     .items_center()
                     .px(px(10.0))
-                    .h(px(30.0))
+                    .h(px(TOP_BAR_TAB_HEIGHT))
                     .text_size(px(11.5))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
@@ -848,7 +848,7 @@ impl ConWorkspace {
                             .max_w(px(200.0))
                             .items_center()
                             .px(px(10.0))
-                            .h(px(30.0))
+                            .h(px(TOP_BAR_TAB_HEIGHT))
                             .text_size(px(11.5))
                             .rounded_t(px(6.0))
                             .bg(theme.primary.opacity(0.18))
@@ -1050,7 +1050,7 @@ impl ConWorkspace {
                                 .max_w(px(200.0))
                                 .items_center()
                                 .px(px(10.0))
-                                .h(px(30.0))
+                                .h(px(TOP_BAR_TAB_HEIGHT))
                                 .text_size(px(11.5))
                                 .rounded_t(px(6.0))
                                 .bg(theme.primary.opacity(0.18))

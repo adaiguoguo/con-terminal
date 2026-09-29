@@ -428,14 +428,12 @@ impl ConWorkspace {
             shell_history: HashMap::new(),
         });
 
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-            if Self::should_defer_top_chrome_refresh_when_tab_strip_appears() {
-                cx.on_next_frame(window, |_, _, cx| {
-                    cx.notify();
-                });
-            }
+        if self.sync_tab_strip_motion()
+            && Self::should_defer_top_chrome_refresh_when_tab_strip_appears()
+        {
+            cx.on_next_frame(window, |_, _, cx| {
+                cx.notify();
+            });
         }
 
         let new_index = self.tabs.len() - 1;
@@ -601,10 +599,7 @@ impl ConWorkspace {
         // assigned the same summary_id (which won't happen, since
         // ids are monotonic) doesn't inherit stale state.
         self.tab_summary_engine.forget(removed.summary_id);
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
+        self.sync_tab_strip_motion();
         if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         } else if self.active_tab > index {

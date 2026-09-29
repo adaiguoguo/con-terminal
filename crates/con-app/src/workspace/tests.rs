@@ -1259,5 +1259,16 @@ fn new_tab_reveals_hidden_vertical_tab_rail_only() {
 
 #[test]
 fn promoting_single_tab_to_tab_strip_requires_deferred_top_chrome_refresh() {
-    assert!(ConWorkspace::should_defer_top_chrome_refresh_when_tab_strip_appears_for_tests());
+    assert_eq!(
+        ConWorkspace::should_defer_top_chrome_refresh_when_tab_strip_appears_for_tests(),
+        cfg!(not(target_os = "macos")),
+    );
+}
+
+#[test]
+fn macos_tab_count_does_not_resize_the_native_terminal() {
+    #[cfg(target_os = "macos")]
+    assert_eq!(super::TOP_BAR_COMPACT_HEIGHT, super::TOP_BAR_TABS_HEIGHT);
+    #[cfg(not(target_os = "macos"))]
+    assert!(super::TOP_BAR_TABS_HEIGHT > super::TOP_BAR_COMPACT_HEIGHT);
 }

@@ -598,7 +598,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn should_defer_top_chrome_refresh_when_tab_strip_appears() -> bool {
-        true
+        cfg!(not(target_os = "macos"))
     }
 
     #[cfg(test)]

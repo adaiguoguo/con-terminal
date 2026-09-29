@@ -438,10 +438,7 @@ impl ConWorkspace {
             self.tabs.push(tab);
         }
 
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
+        self.sync_tab_strip_motion();
 
         self.active_tab = first_new + imported_active;
         let incoming = std::mem::replace(
