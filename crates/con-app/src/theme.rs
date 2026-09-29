@@ -3,8 +3,9 @@ use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
 use gpui_component::scroll::ScrollbarMode;
-use gpui_component::{Theme, ThemeMode, ThemeRegistry};
+use gpui_component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
+use std::rc::Rc;
 
 const CON_DARK_THEME: &str = include_str!("../../../assets/themes/con-dark.json");
 const CON_LIGHT_THEME: &str = include_str!("../../../assets/themes/con-light.json");
@@ -184,18 +185,18 @@ pub fn init_theme(
             .expect("Failed to load theme");
     }
 
-    // For init, generate from the resolved terminal theme
-    if let Some(tt) = TerminalTheme::by_name(terminal_theme) {
-        apply_dynamic_theme(&tt, cx);
+    let config = if let Some(tt) = TerminalTheme::by_name(terminal_theme) {
+        dynamic_theme(&tt, cx)
     } else {
-        apply_gpui_theme_by_name(terminal_theme, cx);
-    }
-    let mode = TerminalTheme::by_name(terminal_theme)
-        .map(|theme| theme_mode(&theme))
-        .unwrap_or(ThemeMode::Dark);
-    Theme::change(mode, None, cx);
-    apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
-    apply_scrollbar_overrides(cx);
+        fallback_theme(terminal_theme, ThemeMode::Dark, cx)
+    };
+    apply_theme(
+        config,
+        terminal_font_family,
+        ui_font_family,
+        ui_font_size,
+        cx,
+    );
 }
 
 fn register_command_prompt_language() {
@@ -220,30 +221,39 @@ pub fn sync_gpui_theme(
     terminal_font_family: &str,
     ui_font_family: &str,
     ui_font_size: f32,
-    window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
-    apply_dynamic_theme(terminal_theme, cx);
-    let mode = theme_mode(terminal_theme);
-    Theme::change(mode, Some(window), cx);
-    apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
-    apply_scrollbar_overrides(cx);
+    let config = dynamic_theme(terminal_theme, cx);
+    apply_theme(
+        config,
+        terminal_font_family,
+        ui_font_family,
+        ui_font_size,
+        cx,
+    );
 }
 
-fn apply_font_overrides(
+/// Publish the complete theme once, including Con's typography and track style.
+fn apply_theme(
+    mut config: Rc<ThemeConfig>,
     terminal_font_family: &str,
     ui_font_family: &str,
     ui_font_size: f32,
     cx: &mut App,
 ) {
-    Theme::global_mut(cx).mono_font_family =
-        canonical_terminal_font_family(terminal_font_family).into();
-    Theme::global_mut(cx).font_family = ui_font_family.to_string().into();
+    let theme_config = Rc::make_mut(&mut config);
+    theme_config.mono_font_family =
+        Some(canonical_terminal_font_family(terminal_font_family).into());
+    theme_config.font_family = Some(ui_font_family.to_string().into());
     let clamped_ui_font_size = ui_font_size.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE);
-    Theme::global_mut(cx).font_size = gpui::px(clamped_ui_font_size);
-    Theme::global_mut(cx).mono_font_size = gpui::px(
-        (clamped_ui_font_size - 3.0).clamp(MIN_UI_FONT_SIZE - 1.0, MAX_UI_FONT_SIZE - 3.0),
-    );
+    theme_config.font_size = Some(clamped_ui_font_size);
+    theme_config.mono_font_size =
+        Some((clamped_ui_font_size - 3.0).clamp(MIN_UI_FONT_SIZE - 1.0, MAX_UI_FONT_SIZE - 3.0));
+    theme_config.colors.scrollbar = Some("#00000000".into());
+    Theme::update(cx, |theme| {
+        theme.apply_config(&config);
+        theme.scrollbar_mode = ScrollbarMode::Hover;
+    });
 }
 
 /// Map the user-facing display name (`"Ioskeley Mono"` — what the
@@ -276,52 +286,33 @@ pub fn canonical_terminal_font_family(name: &str) -> String {
     name.trim().to_string()
 }
 
-/// Apply con's scrollbar overrides after any Theme::change call.
-/// Must run AFTER Theme::change because it resets colors from the theme config.
-fn apply_scrollbar_overrides(cx: &mut App) {
-    Theme::global_mut(cx).scrollbar_mode = ScrollbarMode::Hover;
-    Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
-    // Base primitives and TextView cache a projection of the styled theme.
-    // Publish both these overrides and the preceding font overrides together.
-    Theme::sync_base(cx);
-}
-
-/// Generate a GPUI theme dynamically from terminal ANSI colors and register it.
-fn apply_dynamic_theme(tt: &TerminalTheme, cx: &mut App) {
+/// Resolve a fresh config so same-mode palette changes are not registry-deduplicated.
+fn dynamic_theme(tt: &TerminalTheme, cx: &App) -> Rc<ThemeConfig> {
     let json = generate_gpui_theme_json(tt);
-    // Register (or re-register) the dynamic theme
-    // ThemeRegistry skips duplicates, so we directly set the theme config
     match serde_json::from_str::<gpui_component::ThemeSet>(&json) {
-        Ok(theme_set) => {
-            for theme_config in theme_set.themes {
-                let rc = std::rc::Rc::new(theme_config);
-                if tt.is_dark() {
-                    Theme::global_mut(cx).dark_theme = rc;
-                } else {
-                    Theme::global_mut(cx).light_theme = rc;
-                }
-            }
-        }
+        Ok(theme_set) => Rc::new(
+            theme_set
+                .themes
+                .into_iter()
+                .next()
+                .expect("one generated theme"),
+        ),
         Err(e) => {
             log::error!("Failed to parse generated theme JSON: {e}");
-            apply_gpui_theme_by_name(&tt.name, cx);
+            fallback_theme(&tt.name, theme_mode(tt), cx)
         }
     }
 }
 
 /// Fallback: map terminal theme name to a pre-registered GPUI theme.
-fn apply_gpui_theme_by_name(terminal_theme_name: &str, cx: &mut App) {
-    let (dark_name, light_name) = match terminal_theme_name {
-        "catppuccin-mocha" => ("Catppuccin Mocha", "Con Light"),
-        "tokyonight" => ("Tokyo Night", "Con Light"),
-        _ => ("Con Dark", "Con Light"),
+fn fallback_theme(terminal_theme_name: &str, mode: ThemeMode, cx: &App) -> Rc<ThemeConfig> {
+    let name = match (mode.is_dark(), terminal_theme_name) {
+        (false, _) => "Con Light",
+        (true, "catppuccin-mocha") => "Catppuccin Mocha",
+        (true, "tokyonight") => "Tokyo Night",
+        (true, _) => "Con Dark",
     };
-    if let Some(d) = ThemeRegistry::global(cx).themes().get(dark_name).cloned() {
-        Theme::global_mut(cx).dark_theme = d;
-    }
-    if let Some(l) = ThemeRegistry::global(cx).themes().get(light_name).cloned() {
-        Theme::global_mut(cx).light_theme = l;
-    }
+    ThemeRegistry::global(cx).themes()[name].clone()
 }
 
 /// Generate a complete GPUI theme JSON string from terminal theme colors.
@@ -641,15 +632,77 @@ mod tests {
     fn overrides_reach_base_theme_after_each_mode_change(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
         cx.update(|cx| {
-            for mode in [ThemeMode::Light, ThemeMode::Dark, ThemeMode::Light] {
+            for (mode, requested, ui_size, mono_size) in [
+                (ThemeMode::Light, 19.0, 19.0, 16.0),
+                (ThemeMode::Dark, 40.0, 24.0, 21.0),
+                (ThemeMode::Dark, -2.0, 12.0, 11.0),
+                (ThemeMode::Light, 17.0, 17.0, 14.0),
+            ] {
                 Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx);
-                Theme::change(mode, None, cx);
-                apply_font_overrides("Ioskeley Mono", ".SystemUIFont", 19.0, cx);
-                apply_scrollbar_overrides(cx);
+                let mut config = ThemeConfig {
+                    mode,
+                    font_size: Some(11.0),
+                    mono_font_size: Some(9.0),
+                    ..Default::default()
+                };
+                config.colors.scrollbar = Some("#A03050".into());
+                let config = Rc::new(config);
+                apply_theme(
+                    config.clone(),
+                    "Ioskeley Mono",
+                    ".SystemUIFont",
+                    requested,
+                    cx,
+                );
 
+                // Registry-owned configurations must not acquire caller overrides.
+                assert_eq!(config.font_size, Some(11.0));
+                assert_eq!(config.colors.scrollbar.as_deref(), Some("#A03050"));
+
+                assert_eq!(
+                    Theme::global(cx).tokens.scrollbar,
+                    gpui::transparent_black().into(),
+                    "the styled scrollbar token must reflect Con's transparent track"
+                );
                 let base = gpui_base::Theme::global(cx);
                 assert_eq!(base.scrollbar.mode(), ScrollbarMode::Hover);
                 assert_eq!(base.tokens, Theme::global(cx).semantic_tokens());
+                assert_eq!(Theme::global(cx).mode, mode);
+                assert_eq!(base.tokens.typography.mono.as_ref(), "IoskeleyMono");
+                assert_eq!(base.tokens.typography.md.size, gpui::px(ui_size));
+                assert_eq!(base.tokens.typography.mono_md.size, gpui::px(mono_size));
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn native_palette_changes_reload_without_a_name_or_mode_change(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            init_theme(
+                cx,
+                "unknown-native-theme",
+                "Ioskeley Mono",
+                ".SystemUIFont",
+                19.0,
+            );
+            assert_eq!(Theme::global(cx).mode, ThemeMode::Dark);
+
+            let mut terminal = TerminalTheme::flexoki_dark();
+            for (background, expected) in [
+                (Color::rgb(0x12, 0x28, 0x35), 0x122835),
+                (Color::rgb(0x30, 0x18, 0x25), 0x301825),
+            ] {
+                terminal.background = background;
+                sync_gpui_theme(&terminal, "Ioskeley Mono", ".SystemUIFont", 19.0, cx);
+                let theme = Theme::global(cx);
+                assert_eq!(theme.background, gpui::rgb(expected).into());
+                assert_eq!(theme.mode, ThemeMode::Dark);
+                assert_eq!(
+                    gpui_base::Theme::global(cx).tokens.colors.background,
+                    theme.background
+                );
+                assert_eq!(theme.font_size, gpui::px(19.0));
             }
         });
     }

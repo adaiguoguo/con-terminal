@@ -95,6 +95,11 @@ default branch; upgrading a snapshot does not require adopting every wrapper.
   keep one `Root` per window. Root now hosts dialog, sheet and notification
   layers automatically; use `WindowExt` for operations, not manual layer
   mounting. Existing `Root::new` window construction remains supported.
+- **Theme publication:** resolve a complete `ThemeConfig`, including Con's
+  font and transparent scrollbar-track overrides, then apply it inside
+  `Theme::update`. This publishes styled tokens, Base projection and window
+  refresh together. Do not restore the old `global_mut` / `sync_base` chain;
+  refreshing the same theme name and mode must still apply a new native palette.
 - **Composers:** use `TextareaState::submit_on_enter(true)` and the modifiers
   delivered by `InputEvent::PressEnter`. Do not observe global keystrokes to
   reconstruct those modifiers or remove an inserted newline with `set_value`.
