@@ -6,7 +6,25 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.116`
 
+### Added
+
+**macOS terminal links**
+
+- Command-click a detected local file link in the terminal to open text in Con's
+  editor or an image in its preview. Links with `:line[:column]` jump to that place;
+  documents and folders still open in their associated app. _(PR
+  [#419](https://github.com/nowledge-co/con-terminal/pull/419) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
 ### Fixed
+
+**Appearance and editor**
+
+- Theme changes now refresh controls and scrollbars together, while UI font
+  changes stay in sync across the interface.
+  Editor diagnostics continue to arrive even when the editor is out of view.
+  _(PR [#423](https://github.com/nowledge-co/con-terminal/pull/423) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
 **Tabs**
 
