@@ -163,12 +163,12 @@ where
     let icon_color = if active {
         theme.foreground
     } else {
-        theme.foreground.opacity(0.62)
+        theme.muted_foreground
     };
     let label_color = if active {
         theme.foreground
     } else {
-        theme.foreground.opacity(0.60)
+        theme.muted_foreground
     };
     let active_bg = theme
         .foreground

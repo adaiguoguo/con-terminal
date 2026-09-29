@@ -608,14 +608,16 @@ where
         .toggled(active)
         .rounded(px(6.0))
         .with_size(ui_space_px(theme, 26.0))
-        .size(ui_space_px(theme, 26.0))
+        .w(ui_space_px(theme, 34.0))
+        .h(ui_space_px(theme, 26.0))
+        .p_0()
         .flex_shrink_0()
         .text_size(ui_px(theme, 11.5))
-        .font_family(theme.font_family.clone())
+        .font_family(theme.mono_font_family.clone())
         .text_color(if active {
             theme.primary
         } else {
-            theme.foreground.opacity(0.66)
+            theme.muted_foreground
         })
         .on_click(handler)
 }
@@ -628,7 +630,7 @@ fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {
         .justify_center()
         .text_size(ui_px(theme, 12.0))
         .font_family(theme.font_family.clone())
-        .text_color(theme.foreground.opacity(0.48))
+        .text_color(theme.muted_foreground)
         .child(text)
 }
 
