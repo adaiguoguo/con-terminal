@@ -508,7 +508,7 @@ pub struct EditorView {
     open_generation: u64,
     scroll_handle: UniformListScrollHandle,
     cursor_visible: bool,
-    cursor_blink: Option<Task<()>>,
+    _cursor_blink: Task<()>,
     selection_anchor: Option<CursorPosition>,
     content_bounds: Option<Bounds<Pixels>>,
     focus_handle: FocusHandle,
@@ -517,7 +517,7 @@ pub struct EditorView {
     lsp_diagnostics: HashMap<PathBuf, Vec<EditorDiagnostic>>,
     lsp_event_tx: Sender<LspClientEvent>,
     lsp_event_rx: Receiver<LspClientEvent>,
-    lsp_event_pump: Option<Task<()>>,
+    _lsp_event_pump: Task<()>,
     lsp_change_generations: HashMap<PathBuf, u64>,
     lsp_change_debounce_tasks: HashMap<PathBuf, Task<()>>,
     dirty_close_blocked_tab: Option<usize>,
@@ -531,13 +531,50 @@ pub struct EditorView {
 impl EditorView {
     pub fn new_with_font_size(font_size: f32, cx: &mut Context<Self>) -> Self {
         let (lsp_event_tx, lsp_event_rx) = crossbeam_channel::unbounded();
+        // Own background work for the entity's lifetime, not its render passes.
+        let cursor_blink = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(550))
+                    .await;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.tabs.is_empty() || this.active_tab_is_image() {
+                            return;
+                        }
+                        this.cursor_visible = !this.cursor_visible;
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let lsp_event_pump = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                if this
+                    .update(cx, |this, cx| {
+                        if this.drain_lsp_events() {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         Self {
             tabs: Vec::new(),
             active_tab: 0,
             open_generation: 0,
             scroll_handle: UniformListScrollHandle::new(),
             cursor_visible: true,
-            cursor_blink: None,
+            _cursor_blink: cursor_blink,
             selection_anchor: None,
             content_bounds: None,
             focus_handle: cx.focus_handle(),
@@ -546,7 +583,7 @@ impl EditorView {
             lsp_diagnostics: HashMap::new(),
             lsp_event_tx,
             lsp_event_rx,
-            lsp_event_pump: None,
+            _lsp_event_pump: lsp_event_pump,
             lsp_change_generations: HashMap::new(),
             lsp_change_debounce_tasks: HashMap::new(),
             dirty_close_blocked_tab: None,
@@ -1648,42 +1685,6 @@ impl Focusable for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.cursor_blink.is_none() {
-            self.cursor_blink = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(550))
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        if this.active_tab_is_image() {
-                            // The image viewer has no cursor to blink; skip the
-                            // redundant re-render.
-                            return;
-                        }
-                        this.cursor_visible = !this.cursor_visible;
-                        cx.notify();
-                    });
-                }
-            }));
-        }
-        if self.lsp_event_pump.is_none() {
-            self.lsp_event_pump = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(120))
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        if this.drain_lsp_events() {
-                            cx.notify();
-                        }
-                    });
-                }
-            }));
-        }
-        if self.drain_lsp_events() {
-            cx.notify();
-        }
-
         let theme = cx.theme().clone();
         let fg = theme.foreground;
         let bg = theme.background;
@@ -2318,6 +2319,28 @@ mod tests {
     use super::*;
     use gpui::AppContext as _;
     use std::path::Path;
+
+    #[gpui::test]
+    fn lsp_events_are_processed_without_rendering(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        let path = PathBuf::from("/tmp/con-unrendered-editor.rs");
+        view.update(cx, |view, _| {
+            view.lsp_event_tx
+                .send(LspClientEvent::Diagnostics {
+                    path: path.clone(),
+                    diagnostics: Vec::new(),
+                })
+                .unwrap();
+            assert!(!view.lsp_diagnostics.contains_key(&path));
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(120));
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(view.lsp_diagnostics.contains_key(&path));
+            assert!(view.lsp_event_rx.is_empty());
+        });
+    }
 
     #[test]
     fn preview_toggle_only_applies_to_markdown() {

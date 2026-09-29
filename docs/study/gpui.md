@@ -125,6 +125,12 @@ default branch; upgrading a snapshot does not require adopting every wrapper.
   Asset loading and theme mutation must follow the pinned asset ownership and
   base-theme synchronization contracts; APIs seen only on upstream main are
   not migration requirements for this baseline.
+- **Entity-owned work:** start editor event pumps in initialization, retain
+  their `Task` handles, and publish changed state with `cx.notify()` from the
+  update callback. Do not drain external event queues or start lifetime tasks
+  from `render`; processing must not depend on whether a view has painted.
+  See the pinned [task guide](https://github.com/longbridge/gpui-kit/blob/v0.7.0/website/docs/task.md)
+  and [event guide](https://github.com/longbridge/gpui-kit/blob/v0.7.0/website/docs/event.md).
 
 Verify actual keystrokes, completion at a selection, retained input focus,
 palette dismissal, and cached widths with `cargo test -p con --bin con`.

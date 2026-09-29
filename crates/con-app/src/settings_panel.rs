@@ -7579,7 +7579,9 @@ mod tests {
         ] {
             let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
             let (panel, view) = cx.add_window_view(move |window, cx| {
-                gpui_component::Theme::global_mut(cx).font_size = gpui::px(font_size);
+                gpui_component::Theme::update(cx, |theme| {
+                    theme.font_size = gpui::px(font_size);
+                });
                 window.set_rem_size(gpui::px(font_size));
                 let mut panel = SettingsPanel::new(
                     &con_core::Config::default(),
