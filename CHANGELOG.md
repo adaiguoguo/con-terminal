@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.117`
+
+### Changed
+
+**Appearance**
+
+- The agent panel now feels like part of the translucent window instead of a
+  separate dark block. Its empty-state text is easier to read, and the send
+  controls stay quiet until there is something to send. _(PR
+  [#426](https://github.com/nowledge-co/con-terminal/pull/426) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.116` - 2026-09-29
 
 ### Added
