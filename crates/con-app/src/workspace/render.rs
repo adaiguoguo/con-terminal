@@ -424,14 +424,27 @@ impl Render for ConWorkspace {
         let pane_divider_color = terminal_separator_over_backdrop(terminal_surface_color, theme);
         let top_bar_surface_color = theme.title_bar.opacity(self.terminal_opacity);
         let input_bar_surface_color = top_bar_surface_color;
-        let elevated_panel_surface_color = theme
-            .title_bar
+        #[cfg(target_os = "macos")]
+        let elevated_panel_base_color = terminal_surface_color;
+        #[cfg(not(target_os = "macos"))]
+        let elevated_panel_base_color = theme.title_bar;
+        let elevated_panel_surface_color = elevated_panel_base_color
             .blend(
                 theme
                     .background
                     .opacity(if theme.is_dark() { 0.14 } else { 0.06 }),
             )
             .opacity(elevated_ui_surface_opacity);
+        // The panel's own fill covers this pixel; a second static fill would
+        // darken it. Transition and drag seam covers still prevent light leaks.
+        #[cfg(target_os = "macos")]
+        let agent_panel_divider_color = theme.transparent;
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_divider_color = chrome_static_seam_color;
+        #[cfg(target_os = "macos")]
+        let agent_panel_resize_hover_color = theme.foreground.opacity(0.06);
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_resize_hover_color = chrome_static_seam_color.opacity(0.18);
         let sidebar_seam_color =
             theme
                 .foreground
@@ -908,7 +921,7 @@ impl Render for ConWorkspace {
                             .w(px(1.0))
                             .h_full()
                             .flex_shrink_0()
-                            .bg(chrome_static_seam_color)
+                            .bg(agent_panel_divider_color)
                             .child(
                                 div()
                                     .absolute()
@@ -918,7 +931,7 @@ impl Render for ConWorkspace {
                                     .w(px(5.0))
                                     .cursor_col_resize()
                                     .bg(theme.transparent)
-                                    .hover(|s| s.bg(chrome_static_seam_color.opacity(0.18)))
+                                    .hover(|s| s.bg(agent_panel_resize_hover_color))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(
