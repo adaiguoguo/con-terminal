@@ -598,7 +598,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn should_defer_top_chrome_refresh_when_tab_strip_appears() -> bool {
-        true
+        cfg!(not(target_os = "macos"))
     }
 
     #[cfg(test)]
@@ -611,6 +611,7 @@ impl ConWorkspace {
         if !self.harness.config().suggestion_model.enabled {
             return;
         }
+        let started = std::time::Instant::now();
         let tx = self.tab_summary_tx.clone();
         let generation = self.tab_summary_generation;
         for (i, tab) in self.tabs.iter().enumerate() {
@@ -646,6 +647,15 @@ impl ConWorkspace {
             self.tab_summary_engine.request(req, move |summary| {
                 let _ = tx.send((generation, summary_epoch, summary));
             });
+        }
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(50) {
+            log::warn!(
+                target: "con::perf",
+                "tab summary sampling blocked UI for {:.1}ms (tabs={})",
+                elapsed.as_secs_f64() * 1000.0,
+                self.tabs.len(),
+            );
         }
     }
 }

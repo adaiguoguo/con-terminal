@@ -142,6 +142,8 @@ pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
 pub struct GhosttyProgressChanged;
 
+impl EventEmitter<crate::terminal_file_link::TerminalFileLink> for GhosttyView {}
+
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
@@ -385,6 +387,7 @@ pub struct GhosttyView {
     native_transition_underlay_owner_id: u64,
     left_mouse_sequence: MouseButtonSequence<i32>,
     tui_copy_gesture: TuiCopyGesture,
+    plain_link_generation: u64,
     right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
@@ -469,6 +472,7 @@ impl GhosttyView {
                 .fetch_add(1, Ordering::Relaxed),
             left_mouse_sequence: MouseButtonSequence::default(),
             tui_copy_gesture: TuiCopyGesture::default(),
+            plain_link_generation: 0,
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
             handoff_menu_entry_enabled: Cell::new(false),
@@ -855,7 +859,31 @@ impl GhosttyView {
                 GhosttySurfaceEvent::SplitRequest(direction) => {
                     cx.emit(GhosttySplitRequested(direction));
                 }
-                GhosttySurfaceEvent::OpenUrl(url) => cx.open_url(&url),
+                GhosttySurfaceEvent::OpenUrl(url) => {
+                    use crate::terminal_file_link::{PlainLink, resolve_plain_link};
+                    self.plain_link_generation = self.plain_link_generation.wrapping_add(1);
+                    let generation = self.plain_link_generation;
+                    let cwd = self.current_dir().map(std::path::PathBuf::from);
+                    // File type checks may touch a slow filesystem. Keep them
+                    // off the UI thread, capturing this terminal's CWD now.
+                    cx.spawn(async move |this, cx| {
+                        let target = cx
+                            .background_executor()
+                            .spawn(async move { resolve_plain_link(&url, cwd.as_deref()) })
+                            .await;
+                        let _ = this.update(cx, |this, cx| {
+                            if this.plain_link_generation != generation {
+                                return;
+                            }
+                            match target {
+                                PlainLink::File(link) => cx.emit(link),
+                                PlainLink::Url(url) => cx.open_url(&url),
+                                PlainLink::Ignore => {}
+                            }
+                        });
+                    })
+                    .detach();
+                }
                 GhosttySurfaceEvent::OpenOsc8Url(url) => match evaluate_osc8_url(&url) {
                     Osc8UrlDecision::Allow(url) => cx.open_url(&url),
                     Osc8UrlDecision::Deny(denial) => self.blocked_osc8_url = Some(denial),

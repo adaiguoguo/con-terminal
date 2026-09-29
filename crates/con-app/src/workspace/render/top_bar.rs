@@ -97,7 +97,6 @@ impl ConWorkspace {
         top_bar_controls_offset: f32,
         compact_titlebar_progress: f32,
         tab_strip_progress: f32,
-        elevated_ui_surface_opacity: f32,
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
         self.tab_activity.read(cx).clear();
@@ -421,7 +420,7 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(17.0))
+                    .size(px(22.0))
                     .flex_shrink_0()
                     .rounded(px(5.0))
                     .cursor_pointer()
@@ -434,12 +433,10 @@ impl ConWorkspace {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
                 }
                 let close_button = close_el
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.close_tab_by_id(tab_id, window, cx);
-                        }),
-                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.close_tab_by_id(tab_id, window, cx);
+                    }))
                     .child(
                         svg()
                             .path("phosphor/x.svg")
@@ -468,7 +465,7 @@ impl ConWorkspace {
                         // on_drag below. The dummy values avoid guessing tab
                         // geometry during render construction.
                         cursor_offset_y: px(0.0),
-                        top: px(TOP_BAR_COMPACT_HEIGHT),
+                        top: px(TAB_DROP_PREVIEW_TOP),
                         height: preview_size.height,
                         preview_height: preview_size.height,
                         cursor_offset_x: px(0.0),
@@ -496,7 +493,7 @@ impl ConWorkspace {
                     .max_w(px(220.0))
                     .items_center()
                     .px(px(10.0))
-                    .h(px(30.0))
+                    .h(px(TOP_BAR_TAB_HEIGHT))
                     .text_size(px(11.5))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
@@ -648,7 +645,7 @@ impl ConWorkspace {
                                 crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
                                 cx,
                             )),
-                            None => el.bg(theme.background.opacity(elevated_ui_surface_opacity)),
+                            None => el.bg(theme.foreground.opacity(0.085)),
                         })
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
@@ -661,7 +658,7 @@ impl ConWorkspace {
                         .map(|color| {
                             crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
                         })
-                        .unwrap_or(theme.background.opacity(0.14));
+                        .unwrap_or(theme.foreground.opacity(0.025));
                     let inactive_hover_bg = tab_color
                         .map(|color| {
                             crate::tab_colors::tab_accent_surface_hsla(
@@ -670,7 +667,7 @@ impl ConWorkspace {
                                 cx,
                             )
                         })
-                        .unwrap_or(theme.background.opacity(0.20));
+                        .unwrap_or(theme.foreground.opacity(0.065));
                     tab_el = tab_el
                         .rounded_t(px(6.0))
                         .bg(inactive_bg)
@@ -851,7 +848,7 @@ impl ConWorkspace {
                             .max_w(px(200.0))
                             .items_center()
                             .px(px(10.0))
-                            .h(px(30.0))
+                            .h(px(TOP_BAR_TAB_HEIGHT))
                             .text_size(px(11.5))
                             .rounded_t(px(6.0))
                             .bg(theme.primary.opacity(0.18))
@@ -1053,7 +1050,7 @@ impl ConWorkspace {
                                 .max_w(px(200.0))
                                 .items_center()
                                 .px(px(10.0))
-                                .h(px(30.0))
+                                .h(px(TOP_BAR_TAB_HEIGHT))
                                 .text_size(px(11.5))
                                 .rounded_t(px(6.0))
                                 .bg(theme.primary.opacity(0.18))

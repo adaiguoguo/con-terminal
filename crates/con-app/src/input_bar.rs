@@ -1,6 +1,6 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme,
+    ActiveTheme, Colorize,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{InputEvent, Position, Textarea, TextareaState},
 };
@@ -1429,9 +1429,9 @@ impl Render for InputBar {
                 .as_deref()
                 .is_some_and(|suffix| !suffix.is_empty());
         let ghost_tint = match self.inline_suggestion_source {
-            Some(SuggestionSource::Path) => theme.success.opacity(0.68),
-            Some(SuggestionSource::Ai) => theme.primary.opacity(0.64),
-            _ => theme.muted_foreground.opacity(0.56),
+            Some(SuggestionSource::Path) => theme.success.mix_oklab(theme.muted_foreground, 0.55),
+            Some(SuggestionSource::Ai) => theme.primary.mix_oklab(theme.muted_foreground, 0.55),
+            _ => theme.muted_foreground,
         };
         let ghost_prefix = input_value.replace(' ', "\u{00A0}");
         let ghost_suffix = self

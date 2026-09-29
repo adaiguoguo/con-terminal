@@ -102,6 +102,7 @@ ttf-parser = "0.25"
 socket2 = "0.6"
 
 [dev-dependencies]
+tempfile = "3"
 # Layout tests use gpui's visual test harness (debug_bounds, TestAppContext).
 gpui = { workspace = true, features = ["test-support"] }
 # Inspect the theme projection consumed by the component library's primitives.
