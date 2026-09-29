@@ -1,17 +1,17 @@
 //! Sidebar search panel — searches files below the active sidebar root.
 
 use crate::file_tree_view::OpenFile;
-use crate::ui_scale::ui_icon_px;
+use crate::ui_scale::{ui_icon_px, ui_px, ui_space_px};
 use gpui::{
-    Context, Div, Entity, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledText, TextStyle,
-    WhiteSpace, Window, div, prelude::*, px, svg,
+    ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    StyledText, TextStyle, WhiteSpace, Window, div, prelude::*, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Sizable as _,
-    input::{Textarea, TextareaState},
+    ActiveTheme, Selectable as _, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    input::{Input, InputState},
     scroll::{Scrollbar, ScrollbarMode},
-    switch::Switch,
 };
 use regex::{Regex, RegexBuilder};
 use std::{
@@ -104,7 +104,7 @@ impl EventEmitter<OpenFile> for SidebarSearchView {}
 
 pub struct SidebarSearchView {
     root: Option<PathBuf>,
-    query: Entity<TextareaState>,
+    query: Entity<InputState>,
     results_scroll_handle: ScrollHandle,
     query_text: String,
     options: SearchOptions,
@@ -115,11 +115,7 @@ pub struct SidebarSearchView {
 
 impl SidebarSearchView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("Search")
-                .auto_grow(1, 3)
-        });
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search files"));
 
         Self {
             root: None,
@@ -302,7 +298,7 @@ impl Render for SidebarSearchView {
             );
         } else if query_empty {
             rows.push(
-                empty_state("Search files", theme)
+                empty_state("Search across files", theme)
                     .id("search-empty-query")
                     .into_any_element(),
             );
@@ -421,62 +417,72 @@ impl Render for SidebarSearchView {
             .child(
                 div()
                     .px(px(8.0))
-                    .pt(px(8.0))
-                    .pb(px(6.0))
+                    .pt(px(10.0))
+                    .pb(px(8.0))
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
                     .child(
                         div()
-                            .h(px(32.0))
+                            .h(ui_space_px(theme, 38.0))
                             .flex()
                             .items_center()
-                            .gap(px(7.0))
-                            .px(px(8.0))
-                            .rounded(px(7.0))
-                            .bg(theme.foreground.opacity(0.045))
+                            .gap(px(8.0))
+                            .pl(px(10.0))
+                            .pr(px(5.0))
+                            .rounded(px(8.0))
+                            .bg(theme.foreground.opacity(if theme.is_dark() {
+                                0.07
+                            } else {
+                                0.045
+                            }))
                             .child(
                                 svg()
                                     .path("phosphor/magnifying-glass.svg")
-                                    .size(ui_icon_px(theme, 13.0))
+                                    .size(ui_icon_px(theme, 14.0))
                                     .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.72)),
+                                    .text_color(theme.foreground.opacity(0.58)),
                             )
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Textarea::new(&self.query)
+                                    Input::new(&self.query)
                                         .appearance(false)
-                                        .text_size(px(12.0))
-                                        .line_height(px(17.0)),
+                                        .font_family(theme.font_family.clone())
+                                        .text_size(ui_px(theme, 13.0))
+                                        .line_height(ui_px(theme, 18.0))
+                                        .text_color(theme.foreground.opacity(0.92)),
                                 ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(2.0))
+                                    .child(search_option_button(
+                                        "search-case-sensitive",
+                                        "Aa",
+                                        "Match case",
+                                        case_sensitive,
+                                        theme,
+                                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            this.set_case_sensitive(
+                                                !this.options.case_sensitive,
+                                                cx,
+                                            );
+                                            this.focus_query(window, cx);
+                                        }),
+                                    ))
+                                    .child(search_option_button(
+                                        "search-regex",
+                                        ".*",
+                                        "Use regular expression",
+                                        regex_enabled,
+                                        theme,
+                                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            this.set_regex(!this.options.regex, cx);
+                                            this.focus_query(window, cx);
+                                        }),
+                                    )),
                             ),
-                    )
-                    .child(
-                        div()
-                            .h(px(22.0))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap(px(6.0))
-                            .px(px(2.0))
-                            .child(search_option_button(
-                                "search-case-sensitive",
-                                "Aa",
-                                case_sensitive,
-                                theme,
-                                cx.listener(|this, checked: &bool, _window, cx| {
-                                    this.set_case_sensitive(*checked, cx);
-                                }),
-                            ))
-                            .child(search_option_button(
-                                "search-regex",
-                                ".*",
-                                regex_enabled,
-                                theme,
-                                cx.listener(|this, checked: &bool, _window, cx| {
-                                    this.set_regex(*checked, cx);
-                                }),
-                            )),
                     ),
             )
             .child(
@@ -586,34 +592,32 @@ fn result_count_badge(count: usize, theme: &gpui_component::Theme) -> Div {
 fn search_option_button<F>(
     id: &'static str,
     label: &'static str,
+    tooltip: &'static str,
     active: bool,
     theme: &gpui_component::Theme,
     handler: F,
 ) -> impl IntoElement
 where
-    F: Fn(&bool, &mut Window, &mut gpui::App) + 'static,
+    F: Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
-    div()
-        .id(id)
-        .h(px(24.0))
-        .px(px(4.0))
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .text_size(px(11.0))
+    Button::new(id)
+        .label(label)
+        .tooltip(tooltip)
+        .ghost()
+        .selected(active)
+        .toggled(active)
+        .rounded(px(6.0))
+        .with_size(ui_space_px(theme, 26.0))
+        .size(ui_space_px(theme, 26.0))
+        .flex_shrink_0()
+        .text_size(ui_px(theme, 11.5))
         .font_family(theme.font_family.clone())
         .text_color(if active {
             theme.primary
         } else {
-            theme.muted_foreground.opacity(0.86)
+            theme.foreground.opacity(0.66)
         })
-        .child(label)
-        .child(
-            Switch::new(format!("{id}-switch"))
-                .checked(active)
-                .small()
-                .on_click(handler),
-        )
+        .on_click(handler)
 }
 
 fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {
@@ -622,9 +626,9 @@ fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(11.0))
+        .text_size(ui_px(theme, 12.0))
         .font_family(theme.font_family.clone())
-        .text_color(theme.muted_foreground.opacity(0.5))
+        .text_color(theme.foreground.opacity(0.48))
         .child(text)
 }
 

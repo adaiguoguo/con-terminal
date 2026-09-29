@@ -19,9 +19,9 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
 };
 
-use crate::ui_scale::ui_icon_px;
+use crate::ui_scale::{ui_icon_px, ui_px};
 
-pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 32.0;
+pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 36.0;
 
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,11 +138,7 @@ impl Render for ActivityBar {
                 Button::new("activity-close")
                     .icon(Icon::default().path("phosphor/x.svg"))
                     .ghost()
-                    .text_color(theme.muted_foreground.opacity(if theme.is_dark() {
-                        0.82
-                    } else {
-                        0.70
-                    }))
+                    .text_color(theme.foreground.opacity(0.62))
                     .rounded(px(5.0))
                     .with_size(px(20.0))
                     .cursor_pointer()
@@ -167,16 +163,12 @@ where
     let icon_color = if active {
         theme.foreground
     } else {
-        theme
-            .muted_foreground
-            .opacity(if theme.is_dark() { 0.82 } else { 0.72 })
+        theme.foreground.opacity(0.62)
     };
     let label_color = if active {
         theme.foreground
     } else {
-        theme
-            .muted_foreground
-            .opacity(if theme.is_dark() { 0.78 } else { 0.66 })
+        theme.foreground.opacity(0.60)
     };
     let active_bg = theme
         .foreground
@@ -190,10 +182,10 @@ where
         .flex()
         .items_center()
         .justify_center()
-        .h(px(24.0))
+        .h(px(28.0))
         .px(px(6.0))
-        .gap(px(4.5))
-        .rounded(px(5.0))
+        .gap(px(5.0))
+        .rounded(px(6.0))
         .bg(if active { active_bg } else { theme.transparent })
         .text_color(label_color)
         .hover(move |s| s.bg(if active { active_bg } else { hover_bg }))
@@ -203,13 +195,14 @@ where
         .child(
             svg()
                 .path(icon)
-                .size(ui_icon_px(theme, 12.5))
+                .size(ui_icon_px(theme, 13.5))
                 .text_color(icon_color),
         )
         .child(
             div()
-                .text_size(px(11.0))
-                .line_height(px(14.0))
+                .text_size(ui_px(theme, 12.0))
+                .line_height(ui_px(theme, 16.0))
+                .font_family(theme.font_family.clone())
                 .font_weight(if active {
                     FontWeight::MEDIUM
                 } else {
