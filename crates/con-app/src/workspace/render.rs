@@ -993,7 +993,6 @@ impl Render for ConWorkspace {
             top_bar_controls_offset,
             compact_titlebar_progress,
             tab_strip_progress,
-            elevated_ui_surface_opacity,
             top_bar_surface_color,
         );
         let show_compact_top_bar_separator =
@@ -1431,7 +1430,7 @@ impl Render for ConWorkspace {
                     .left(px(terminal_content_left))
                     .right(px(agent_panel_outer_width))
                     .h(px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT))
-                    .bg(chrome_transition_seam_color),
+                    .bg(top_bar_surface_color),
             );
         }
 
