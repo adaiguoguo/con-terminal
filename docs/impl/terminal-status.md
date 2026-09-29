@@ -92,14 +92,14 @@ attention and generic title motion survive, without renewing motion's lease.
 
 ### GPUI snapshot contracts
 
-These contracts refer to the locked `gpui-pre 0.3.6` (Zed `bcf6582`) and
-`gpui-component 0.6.6`, not moving upstream main:
+These contracts refer to the locked `gpui-pre 0.3.7` (Zed `1a28cff`) and
+`gpui-component 0.7.0`, not moving upstream main:
 
-- [`request_animation_frame`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/window.rs#L2609-L2633)
+- [`request_animation_frame`](https://github.com/zed-industries/zed/blob/1a28cff/crates/gpui/src/window.rs#L2605-L2629)
   notifies the current view. Rendered ancestors become dirty too; this overlay
   is not a paint-only invalidation mechanism. `observe_self` observes explicit
   workspace notifications, not every ancestor redraw.
-- [`AnyView::cached`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/view.rs#L421-L525)
+- [`AnyView::cached`](https://github.com/zed-industries/zed/blob/1a28cff/crates/gpui/src/view.rs#L421-L525)
   uses the supplied style as its layout contract. Bounds, mask and text style
   participate in reuse; parent opacity does not. Keep both dimensions constrained
   on the cache shell. Its contents are laid out as an independent root with
@@ -109,7 +109,7 @@ These contracts refer to the locked `gpui-pre 0.3.6` (Zed `bcf6582`) and
   rather than assuming the shell stretches an auto-width flex root.
   Bypass caching through the final transition frame. Do not cache the row
   registration subtree: a cache hit skips its canvas prepaint callbacks.
-- [`with_max_fps`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/elements/animation.rs#L451-L469)
+- [`with_max_fps`](https://github.com/zed-industries/zed/blob/1a28cff/crates/gpui/src/elements/animation.rs#L451-L469)
   throttles animation notifications, not all renders. Synced repeating animations
   share phase; reduced motion stops their continuation scheduling.
 

@@ -1618,12 +1618,6 @@ impl Render for ConWorkspace {
             root = root.child(self.command_palette.clone());
         }
 
-        // Root owns notification state but requires an explicit display layer.
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        {
-            root = root.children(gpui_component::Root::render_notification_layer(window, cx));
-        }
-
         #[cfg(target_os = "linux")]
         {
             let mut workspace_frame = root;

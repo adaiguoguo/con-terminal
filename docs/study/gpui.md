@@ -85,12 +85,16 @@ In our workspace manifest, GPUI resolves from exact-pinned `gpui-pre` crates.io 
 
 ## Migration contracts
 
-The `gpui-pre = 0.3.6` baseline corresponds to Zed revision
-`bcf6582ce3500df93a8a39366640173e6786cea6`. Its paired component release is
-`gpui-component = 0.6.6` from [GPUI Kit](https://github.com/longbridge/gpui-kit).
+The `gpui-pre = 0.3.7` baseline corresponds to Zed revision
+`1a28cff4b409169bac058bca40dfbfeb7621d19b`. Its paired component release is
+`gpui-component = 0.7.0` from [GPUI Kit](https://github.com/longbridge/gpui-kit).
 Review the pinned sources before applying examples from either repository's
 default branch; upgrading a snapshot does not require adopting every wrapper.
 
+- **Window hosting:** call `gpui_component::init` before creating windows and
+  keep one `Root` per window. Root now hosts dialog, sheet and notification
+  layers automatically; use `WindowExt` for operations, not manual layer
+  mounting. Existing `Root::new` window construction remains supported.
 - **Composers:** use `TextareaState::submit_on_enter(true)` and the modifiers
   delivered by `InputEvent::PressEnter`. Do not observe global keystrokes to
   reconstruct those modifiers or remove an inserted newline with `set_value`.

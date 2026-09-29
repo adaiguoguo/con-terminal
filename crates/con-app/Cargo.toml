@@ -105,7 +105,7 @@ socket2 = "0.6"
 # Layout tests use gpui's visual test harness (debug_bounds, TestAppContext).
 gpui = { workspace = true, features = ["test-support"] }
 # Inspect the theme projection consumed by the component library's primitives.
-gpui-base = "=0.6.6"
+gpui-base = "=0.7.0"
 # Verify the bundled status font has outlines, not only character mappings.
 ttf-parser = "0.25"
 
