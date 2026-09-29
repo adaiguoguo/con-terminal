@@ -1162,7 +1162,7 @@ impl ConWorkspace {
                 self.sync_terminal_surface_appearance(&new_theme, window, cx);
             }
             if cfg!(target_os = "macos") || theme_changed || ui_theme_changed {
-                self.sync_gpui_theme_appearance(&new_theme, window, cx);
+                self.sync_gpui_theme_appearance(&new_theme, cx);
             }
         } else {
             log::warn!(
@@ -1190,7 +1190,7 @@ impl ConWorkspace {
     ) {
         self.terminal_theme = theme.clone();
         self.sync_terminal_surface_appearance(&theme, window, cx);
-        self.sync_gpui_theme_appearance(&theme, window, cx);
+        self.sync_gpui_theme_appearance(&theme, cx);
     }
 
     pub(super) fn sync_terminal_surface_appearance(
@@ -1260,19 +1260,13 @@ impl ConWorkspace {
         crate::set_linux_window_blur(_window, self.terminal_blur);
     }
 
-    pub(super) fn sync_gpui_theme_appearance(
-        &self,
-        theme: &TerminalTheme,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn sync_gpui_theme_appearance(&self, theme: &TerminalTheme, cx: &mut Context<Self>) {
         // Sync GPUI UI theme colors with terminal theme
         crate::theme::sync_gpui_theme(
             theme,
             &self.terminal_font_family,
             &self.ui_font_family,
             self.ui_font_size,
-            window,
             cx,
         );
     }

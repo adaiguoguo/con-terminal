@@ -4171,7 +4171,6 @@ impl AgentPanel {
 
 impl Render for AgentPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.ensure_inline_input_state(window, cx);
         self.install_message_list_handler(cx);
         self.sync_message_list_count();
 

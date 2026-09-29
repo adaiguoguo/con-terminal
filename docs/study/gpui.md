@@ -85,12 +85,21 @@ In our workspace manifest, GPUI resolves from exact-pinned `gpui-pre` crates.io 
 
 ## Migration contracts
 
-The `gpui-pre = 0.3.6` baseline corresponds to Zed revision
-`bcf6582ce3500df93a8a39366640173e6786cea6`. Its paired component release is
-`gpui-component = 0.6.6` from [GPUI Kit](https://github.com/longbridge/gpui-kit).
+The `gpui-pre = 0.3.7` baseline corresponds to Zed revision
+`1a28cff4b409169bac058bca40dfbfeb7621d19b`. Its paired component release is
+`gpui-component = 0.7.0` from [GPUI Kit](https://github.com/longbridge/gpui-kit).
 Review the pinned sources before applying examples from either repository's
 default branch; upgrading a snapshot does not require adopting every wrapper.
 
+- **Window hosting:** call `gpui_component::init` before creating windows and
+  keep one `Root` per window. Root now hosts dialog, sheet and notification
+  layers automatically; use `WindowExt` for operations, not manual layer
+  mounting. Existing `Root::new` window construction remains supported.
+- **Theme publication:** resolve a complete `ThemeConfig`, including Con's
+  font and transparent scrollbar-track overrides, then apply it inside
+  `Theme::update`. This publishes styled tokens, Base projection and window
+  refresh together. Do not restore the old `global_mut` / `sync_base` chain;
+  refreshing the same theme name and mode must still apply a new native palette.
 - **Composers:** use `TextareaState::submit_on_enter(true)` and the modifiers
   delivered by `InputEvent::PressEnter`. Do not observe global keystrokes to
   reconstruct those modifiers or remove an inserted newline with `set_value`.
@@ -116,6 +125,12 @@ default branch; upgrading a snapshot does not require adopting every wrapper.
   Asset loading and theme mutation must follow the pinned asset ownership and
   base-theme synchronization contracts; APIs seen only on upstream main are
   not migration requirements for this baseline.
+- **Entity-owned work:** start editor event pumps in initialization, retain
+  their `Task` handles, and publish changed state with `cx.notify()` from the
+  update callback. Do not drain external event queues or start lifetime tasks
+  from `render`; processing must not depend on whether a view has painted.
+  See the pinned [task guide](https://github.com/longbridge/gpui-kit/blob/v0.7.0/website/docs/task.md)
+  and [event guide](https://github.com/longbridge/gpui-kit/blob/v0.7.0/website/docs/event.md).
 
 Verify actual keystrokes, completion at a selection, retained input focus,
 palette dismissal, and cached widths with `cargo test -p con --bin con`.

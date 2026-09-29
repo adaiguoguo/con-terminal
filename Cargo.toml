@@ -27,17 +27,17 @@ con-ghostty = { path = "crates/con-ghostty" }
 con-agent = { path = "crates/con-agent" }
 con-process = { path = "crates/con-process" }
 
-# UI — Zed's GPUI via the `gpui-pre-*` crates.io snapshots (0.3.6 = zed@bcf6582).
+# UI — Zed's GPUI via the `gpui-pre-*` crates.io snapshots (0.3.7 = zed@1a28cff).
 # Pin them exactly to the snapshot gpui-component was released against and bump
 # both together: any snapshot may change GPUI's API, and two snapshots in one
 # tree are incompatible types.
-gpui = { package = "gpui-pre", version = "=0.3.6" }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.6" }
+gpui = { package = "gpui-pre", version = "=0.3.7" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.7" }
 
 # UI Components — upstream gpui-component, never local 3pp paths
-gpui-component = "=0.6.6"
-gpui-kit-assets = "=0.6.6"
+gpui-component = "=0.7.0"
+gpui-kit-assets = "=0.7.0"
 
 # AI Agent
 rig = { package = "rig-core", version = "0.40.0", default-features = false, features = ["rustls"] }
