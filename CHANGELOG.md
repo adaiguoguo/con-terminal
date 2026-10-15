@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.136`
+
+### Fixed
+
+**Tabs**
+
+- Agent tab icons no longer switch to another product when chat, code or tool
+  output mentions it. When the agent cannot be identified, such as behind a
+  shell wrapper like Kiro CLI's terminal integration, tmux or ssh, the tab
+  shows the terminal icon instead of a guessed brand.
+  _(PR [#482](https://github.com/nowledge-co/con-terminal/pull/482) by [@adaiguoguo](https://github.com/adaiguoguo))_
+
 ## `v0.1.0-beta.135` - 2026-10-14
 
 ### Changed
