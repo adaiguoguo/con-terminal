@@ -83,6 +83,13 @@ struct Surface {
     query: Query,
     processes: Vec<ProcessInfo>,
     identity_process: Option<con_ghostty::process::ProcessIdentity>,
+    /// Interpreter process whose screen may name a script-based agent. A
+    /// screen identity lives exactly as long as this process does.
+    screen_host: Option<con_ghostty::process::ProcessIdentity>,
+    /// Visible lines last seen before the current program started. Output
+    /// left by earlier commands is not evidence about the next program.
+    shell_screen: HashMap<String, usize>,
+    shell_screen_revision: Option<u64>,
     revision: u64,
     detection: AgentCliDetectionState,
     last_scan: Option<Instant>,
@@ -117,6 +124,131 @@ impl Surface {
         }
         self.processes = processes;
     }
+
+    /// Process and title evidence outrank screen text, which may be chat,
+    /// code or logs. Screen text only names an otherwise unidentified
+    /// interpreter host, using lines it painted itself, and the first match
+    /// holds for that host's lifetime.
+    fn resolve_identity(
+        &mut self,
+        observation: AgentCliObservation,
+        now: Instant,
+        mut read_screen: impl FnMut() -> Vec<String>,
+    ) -> Option<(&'static str, IdentityScope)> {
+        let direct = native_agent(&self.processes, self.identity_process.as_ref());
+        let identity_process = direct.map(|(_, identity)| identity.clone());
+        let direct = direct.map(|(agent, _)| agent);
+        if self.identity_process != identity_process {
+            self.identity_process = identity_process;
+            self.revision += 1;
+        }
+        let screen_host = screen_host(&self.processes, self.screen_host.as_ref()).cloned();
+        if self.screen_host != screen_host {
+            self.screen_host = screen_host;
+            self.revision += 1;
+            self.detection = AgentCliDetectionState::default();
+        }
+        let observation_changed = self.detection.observe(observation);
+        if observation_changed {
+            self.last_scan = None;
+        }
+        let shell_foreground = !cfg!(target_os = "windows")
+            && !self.processes.is_empty()
+            && self
+                .processes
+                .iter()
+                .all(|process| process_name_is_shell(&process.identity.name));
+        // Typing at the prompt refreshes the snapshot. A new job is also
+        // captured before its process list arrives, which covers output
+        // written to the PTY without keyboard input.
+        let new_job = self.shell_screen_revision != Some(self.revision);
+        if (shell_foreground && observation_changed)
+            || ((shell_foreground || self.processes.is_empty()) && new_job)
+        {
+            self.shell_screen.clear();
+            for line in read_screen() {
+                *self.shell_screen.entry(line).or_default() += 1;
+            }
+            self.shell_screen_revision = Some(self.revision);
+        }
+        let scope = if cfg!(target_os = "windows") {
+            IdentityScope::ProcessTree
+        } else {
+            IdentityScope::ForegroundJob
+        };
+        let confirmed_screen = self
+            .status
+            .identity()
+            .filter(|identity| {
+                identity.scope == IdentityScope::Screen && identity.generation == self.revision
+            })
+            .map(|identity| identity.agent);
+        let detected = if shell_foreground {
+            None
+        } else if let Some(agent) = direct {
+            Some((agent, scope))
+        } else if let Some(agent) = observation.title_agent {
+            Some((agent, IdentityScope::Title))
+        } else if self.screen_host.is_none() {
+            None
+        } else if let Some(agent) = confirmed_screen {
+            Some((agent, IdentityScope::Screen))
+        } else if self
+            .last_scan
+            .is_none_or(|last| now.duration_since(last) >= self.detection.scan_interval())
+            && self.detection.take_screen_scan_attempt()
+        {
+            self.last_scan = Some(now);
+            log::trace!(
+                target: "con::activity",
+                "identity_screen_scan surface={}",
+                observation.terminal_id
+            );
+            let mut earlier = self.shell_screen.clone();
+            let lines: Vec<_> = read_screen()
+                .into_iter()
+                .filter(|line| match earlier.get_mut(line) {
+                    Some(count) if *count > 0 => {
+                        *count -= 1;
+                        false
+                    }
+                    _ => true,
+                })
+                .collect();
+            con_agent::context::classify_screen_agent_cli(None, &lines)
+                .or_else(|| agent_from_screen_text(&lines))
+                .map(|agent| (agent, IdentityScope::Screen))
+        } else {
+            None
+        };
+        if shell_foreground || detected.is_some() {
+            self.detection.finish();
+        }
+        detected
+    }
+}
+
+fn screen_host<'a>(
+    processes: &'a [ProcessInfo],
+    previous: Option<&con_ghostty::process::ProcessIdentity>,
+) -> Option<&'a con_ghostty::process::ProcessIdentity> {
+    let hosts: Vec<_> = processes
+        .iter()
+        .map(|process| &process.identity)
+        .filter(|identity| {
+            process_name_is_interpreter(&identity.name)
+                || identity
+                    .executable
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(process_name_is_interpreter)
+        })
+        .collect();
+    hosts
+        .iter()
+        .find(|host| Some(**host) == previous)
+        .or_else(|| hosts.first())
+        .copied()
 }
 
 fn native_agent<'a>(
@@ -227,6 +359,9 @@ impl ConWorkspace {
                     query: query.clone(),
                     processes: Vec::new(),
                     identity_process: None,
+                    screen_host: None,
+                    shell_screen: HashMap::new(),
+                    shell_screen_revision: None,
                     revision: 0,
                     detection: AgentCliDetectionState::default(),
                     last_scan: None,
@@ -292,65 +427,8 @@ impl ConWorkspace {
                     title_agent,
                     input_generation: terminal.input_generation(cx),
                 };
-                let observation_changed = surface.detection.observe(observation);
-                if observation_changed {
-                    surface.last_scan = None;
-                }
-                let shell_foreground = !cfg!(target_os = "windows")
-                    && !surface.processes.is_empty()
-                    && surface
-                        .processes
-                        .iter()
-                        .all(|process| process_name_is_shell(&process.identity.name));
-                let direct = native_agent(&surface.processes, surface.identity_process.as_ref());
-                let identity_process = direct.map(|(_, identity)| identity.clone());
-                if surface.identity_process != identity_process {
-                    surface.identity_process = identity_process;
-                    surface.revision += 1;
-                }
-                let scope = if cfg!(target_os = "windows") {
-                    IdentityScope::ProcessTree
-                } else {
-                    IdentityScope::ForegroundJob
-                };
-                let mut screen_hit = false;
-                let detected = if shell_foreground {
-                    None
-                } else if let Some((agent, _)) = direct {
-                    Some((agent, scope))
-                } else if let Some(agent) = title_agent {
-                    Some((agent, IdentityScope::Title))
-                } else if (observation_changed || !surface.detection.is_exhausted())
-                    && surface.last_scan.is_none_or(|last| {
-                        now.duration_since(last) >= surface.detection.scan_interval()
-                    })
-                    && surface.detection.take_screen_scan_attempt()
-                {
-                    surface.last_scan = Some(now);
-                    log::trace!(target: "con::activity", "identity_screen_scan surface={id}");
-                    let lines = terminal.content_lines(200, cx);
-                    let agent =
-                        con_agent::context::classify_screen_agent_cli(title.as_deref(), &lines)
-                            .or_else(|| agent_from_screen_text(&lines));
-                    screen_hit = agent.is_some();
-                    agent
-                        .map(|agent| (agent, IdentityScope::Screen))
-                        .or_else(|| {
-                            (!surface.detection.is_exhausted())
-                                .then(|| surface.status.identity())
-                                .flatten()
-                                .filter(|identity| identity.scope == IdentityScope::Screen)
-                                .map(|identity| (identity.agent, identity.scope))
-                        })
-                } else {
-                    surface
-                        .status
-                        .identity()
-                        .map(|identity| (identity.agent, identity.scope))
-                };
-                if direct.is_some() || shell_foreground || title_agent.is_some() || screen_hit {
-                    surface.detection.finish();
-                }
+                let detected =
+                    surface.resolve_identity(observation, now, || terminal.content_lines(200, cx));
                 // A presentation sequence is local to each observation pass;
                 // background results separately validate query + incarnation.
                 let identity = detected.map(|(agent, scope)| AgentIdentity {
@@ -659,6 +737,7 @@ mod tests {
             "cargo · done\nPane 2 · Surface 1"
         );
     }
+    use std::collections::HashMap;
     use std::time::Instant;
 
     use con_ghostty::ProgramStatusEvent;
@@ -686,8 +765,8 @@ mod tests {
         assert!(!super::retain_program_detail(&mut details, 7, None));
     }
     use super::{
-        AgentCliDetectionState, ProcessInfo, Query, Surface, SurfaceStatus, Weak,
-        apply_program_events, native_agent,
+        AgentCliDetectionState, AgentIdentity, IdentityScope, ProcessInfo, Query, Surface,
+        SurfaceStatus, Weak, apply_program_events, native_agent,
     };
 
     fn process(pid: u32, name: &str) -> ProcessInfo {
@@ -744,6 +823,9 @@ mod tests {
             query: Query::Unavailable,
             processes: vec![process(9, "codex")],
             identity_process: None,
+            screen_host: None,
+            shell_screen: HashMap::new(),
+            shell_screen_revision: None,
             revision: 3,
             detection: AgentCliDetectionState::default(),
             last_scan: None,
@@ -781,6 +863,188 @@ mod tests {
             input_generation: 0,
         }));
         assert!(!surface.detection.is_exhausted());
+    }
+
+    fn surface(processes: Vec<ProcessInfo>) -> Surface {
+        Surface {
+            instance: Weak::new(),
+            query: Query::Unavailable,
+            processes,
+            identity_process: None,
+            screen_host: None,
+            shell_screen: HashMap::new(),
+            shell_screen_revision: None,
+            revision: 0,
+            detection: AgentCliDetectionState::default(),
+            last_scan: None,
+            status: SurfaceStatus::new(7),
+            #[cfg(target_os = "linux")]
+            host_request: None,
+            #[cfg(target_os = "linux")]
+            host_observed: None,
+        }
+    }
+
+    /// One observation pass. `step` is the input generation: a new value
+    /// reopens the screen-scan window as typing or chat output would.
+    fn pass(
+        surface: &mut Surface,
+        step: u64,
+        title_agent: Option<&'static str>,
+        screen: &[&str],
+    ) -> Option<(&'static str, IdentityScope)> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let detected = surface.resolve_identity(
+            super::AgentCliObservation {
+                terminal_id: 7,
+                foreground_process_group_id: None,
+                title_agent,
+                input_generation: step,
+            },
+            Instant::now(),
+            || screen.iter().map(|line| line.to_string()).collect(),
+        );
+        surface.status.observe_identity(
+            7,
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            detected.map(|(agent, scope)| AgentIdentity {
+                agent,
+                scope,
+                generation: surface.revision,
+            }),
+        );
+        detected
+    }
+
+    fn agent(detected: Option<(&'static str, IdentityScope)>) -> Option<&'static str> {
+        detected.map(|(agent, _)| agent)
+    }
+
+    #[test]
+    fn brand_text_in_chat_does_not_replace_a_confirmed_screen_identity() {
+        let mut surface = surface(vec![process(4, "node")]);
+        assert_eq!(
+            pass(&mut surface, 1, None, &["Gemini CLI v0.9"]),
+            Some(("gemini", IdentityScope::Screen))
+        );
+        // Chat, code and tool logs later mention other products.
+        for (step, mention) in [(2, "Claude Code"), (3, "OpenAI Codex"), (4, "Kimi Code")] {
+            assert_eq!(
+                pass(
+                    &mut surface,
+                    step,
+                    None,
+                    &[&format!("compare with {mention}")]
+                ),
+                Some(("gemini", IdentityScope::Screen))
+            );
+        }
+        // Screen-text misses do not drop the confirmed identity either.
+        assert_eq!(
+            pass(&mut surface, 5, None, &[]),
+            Some(("gemini", IdentityScope::Screen))
+        );
+    }
+
+    #[test]
+    fn brand_text_cannot_name_unknown_or_non_interpreter_processes() {
+        // Process evidence unavailable: the screen still shows an old banner.
+        let mut unavailable = surface(Vec::new());
+        assert_eq!(pass(&mut unavailable, 1, None, &["Claude Code"]), None);
+        for name in ["vim", "less", "git", "cargo"] {
+            let mut viewer = surface(vec![process(4, name)]);
+            assert_eq!(pass(&mut viewer, 1, None, &["Claude Code"]), None, "{name}");
+        }
+        let mut native = surface(vec![process(4, "codex")]);
+        assert_eq!(
+            agent(pass(&mut native, 1, None, &["Claude Code"])),
+            Some("codex")
+        );
+        let mut titled = surface(vec![process(4, "node")]);
+        assert_eq!(
+            pass(&mut titled, 1, Some("qwen"), &["Claude Code"]),
+            Some(("qwen", IdentityScope::Title))
+        );
+        for name in ["python3", "python3.12", "Python", "node.exe", "bun"] {
+            assert!(super::process_name_is_interpreter(name), "{name}");
+        }
+        for name in ["pythonista", "nodemon", "zsh"] {
+            assert!(!super::process_name_is_interpreter(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn switching_programs_reidentifies_and_returning_to_shell_clears() {
+        let mut surface = surface(vec![process(4, "node")]);
+        assert_eq!(
+            agent(pass(&mut surface, 1, None, &["Gemini CLI"])),
+            Some("gemini")
+        );
+        // Unrelated interpreter children keep the original host.
+        surface.replace_processes(vec![process(4, "node"), process(5, "node")]);
+        assert_eq!(
+            agent(pass(&mut surface, 2, None, &["Claude Code"])),
+            Some("gemini")
+        );
+        // A different interpreter process is a new program.
+        surface.replace_processes(vec![process(9, "node")]);
+        assert_eq!(
+            agent(pass(&mut surface, 3, None, &["Cline needs permission"])),
+            Some("cline")
+        );
+        // A native agent replaces the screen identity.
+        surface.replace_processes(vec![process(10, "claude")]);
+        assert_eq!(
+            agent(pass(&mut surface, 4, None, &["Cline needs permission"])),
+            Some("claude")
+        );
+        // Back at the shell, with the old banner still visible.
+        surface.replace_processes(vec![process(11, "zsh")]);
+        assert_eq!(pass(&mut surface, 5, None, &["Claude Code"]), None);
+        assert_eq!(surface.status.identity(), None);
+        // A query in flight after a job change has no processes yet.
+        surface.replace_processes(vec![process(12, "node")]);
+        assert!(pass(&mut surface, 6, None, &["Gemini CLI"]).is_some());
+        surface.processes.clear();
+        assert_eq!(pass(&mut surface, 7, None, &["Gemini CLI"]), None);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn output_left_at_the_shell_does_not_name_the_next_program() {
+        let residue = "notes: compare OpenAI Codex and Claude Code and Kimi Code";
+        let mut surface = surface(vec![process(3, "zsh")]);
+        assert_eq!(pass(&mut surface, 1, None, &[residue, "$ gemini"]), None);
+        // Gemini's banner is ASCII art: no brand text of its own.
+        surface.replace_processes(vec![process(4, "node")]);
+        let banner = [residue, "$ gemini", "> GEMINI", "Tips for getting started:"];
+        assert_eq!(pass(&mut surface, 2, None, &banner), None);
+        // Lines the program paints itself still identify it.
+        let prompt = [residue, "$ gemini", "Cline needs permission to run"];
+        assert_eq!(agent(pass(&mut surface, 3, None, &prompt)), Some("cline"));
+
+        // Rerunning the same agent while its old banner is still visible.
+        surface.replace_processes(vec![process(5, "zsh")]);
+        let old = ["Gemini CLI v0.9", "$ gemini"];
+        assert_eq!(pass(&mut surface, 4, None, &old), None);
+        surface.replace_processes(vec![process(6, "node")]);
+        let rerun = ["Gemini CLI v0.9", "$ gemini", "Gemini CLI v0.9"];
+        assert_eq!(agent(pass(&mut surface, 5, None, &rerun)), Some("gemini"));
+    }
+
+    #[test]
+    fn output_written_without_typing_is_captured_when_the_next_job_starts() {
+        let residue = "notes: compare OpenAI Codex and Claude Code";
+        let mut surface = surface(vec![process(3, "zsh")]);
+        assert_eq!(pass(&mut surface, 1, None, &[]), None);
+        // `echo` output and `gemini` arrive through the PTY, not the keyboard,
+        // so the input generation stays the same. The foreground job changes.
+        surface.processes.clear();
+        surface.revision += 1;
+        assert_eq!(pass(&mut surface, 1, None, &[residue, "$ gemini"]), None);
+        surface.replace_processes(vec![process(4, "node")]);
+        let banner = [residue, "$ gemini", "> GEMINI"];
+        assert_eq!(pass(&mut surface, 1, None, &banner), None);
     }
 
     #[test]

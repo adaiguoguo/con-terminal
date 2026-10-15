@@ -91,6 +91,18 @@ pub(in crate::workspace) fn process_name_is_shell(name: &str) -> bool {
     )
 }
 
+/// Script-based agents run under an interpreter whose process name carries
+/// no brand. Only these hosts may be named from screen text; a shell, editor,
+/// pager or unknown process showing a brand string is not that agent.
+pub(in crate::workspace) fn process_name_is_interpreter(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    let name = normalized.strip_suffix(".exe").unwrap_or(&normalized);
+    matches!(name, "node" | "nodejs" | "bun" | "deno")
+        || name
+            .strip_prefix("python")
+            .is_some_and(|version| version.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+}
+
 /// Map an OSC-set terminal title to a known agent CLI.
 ///
 /// Some CLIs announce themselves only through the window title, and
@@ -232,6 +244,7 @@ impl AgentCliDetectionState {
         self.screen_scan_attempts_remaining = 0;
     }
 
+    #[cfg(test)]
     pub(in crate::workspace) fn is_exhausted(&self) -> bool {
         self.screen_scan_attempts_remaining == 0
     }
