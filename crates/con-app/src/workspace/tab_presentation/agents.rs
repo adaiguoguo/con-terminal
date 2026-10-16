@@ -62,6 +62,11 @@ pub(in crate::workspace) fn agent_from_process_name(name: &str) -> Option<&'stat
         "goose" => Some("goose"),
         "amp" => Some("amp"),
         "dim" => Some("dim"),
+        "qoder" => Some("qoder"),
+        "hermes" => Some("hermes"),
+        "cline" => Some("cline"),
+        "qwen" => Some("qwen"),
+        "kilo" => Some("kilo"),
         _ => None,
     }
 }

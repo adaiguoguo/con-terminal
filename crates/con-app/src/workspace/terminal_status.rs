@@ -152,8 +152,10 @@ impl Surface {
         if observation_changed {
             self.last_scan = None;
         }
-        let shell_foreground = !cfg!(target_os = "windows")
-            && !self.processes.is_empty()
+        // Windows collects a process tree, not a foreground group. A tree
+        // containing only shells is still safe negative evidence; refresh its
+        // baseline too, rather than reusing output from a previous agent.
+        let shell_foreground = !self.processes.is_empty()
             && self
                 .processes
                 .iter()
@@ -974,6 +976,55 @@ mod tests {
     }
 
     #[test]
+    fn native_agents_do_not_need_screen_text_fallback() {
+        for name in ["qoder", "hermes", "cline", "qwen", "kilo"] {
+            let mut surface = surface(vec![process(4, name)]);
+            assert_eq!(
+                agent(pass(&mut surface, 1, None, &["OpenAI Codex"])),
+                Some(name),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_tree_captures_residue_between_interpreter_runs() {
+        let mut surface = surface(vec![process(3, "pwsh.exe")]);
+        assert_eq!(pass(&mut surface, 1, None, &[]), None);
+        surface.replace_processes(vec![process(3, "pwsh.exe"), process(4, "node.exe")]);
+        assert_eq!(
+            agent(pass(&mut surface, 2, None, &["Gemini CLI"])),
+            Some("gemini")
+        );
+        surface.replace_processes(vec![process(3, "pwsh.exe")]);
+        assert_eq!(pass(&mut surface, 3, Some("qwen"), &["Gemini CLI"]), None);
+        surface.replace_processes(vec![process(3, "pwsh.exe"), process(5, "node.exe")]);
+        assert_eq!(pass(&mut surface, 4, None, &["Gemini CLI"]), None);
+    }
+
+    #[test]
+    fn confirmed_identity_does_not_read_screen_again() {
+        let mut surface = surface(vec![process(4, "node")]);
+        assert_eq!(
+            agent(pass(&mut surface, 1, None, &["Gemini CLI"])),
+            Some("gemini")
+        );
+        assert_eq!(
+            surface.resolve_identity(
+                super::AgentCliObservation {
+                    terminal_id: 7,
+                    foreground_process_group_id: None,
+                    title_agent: None,
+                    input_generation: 2,
+                },
+                Instant::now(),
+                || panic!("a confirmed host must not rescan terminal content"),
+            ),
+            Some(("gemini", IdentityScope::Screen))
+        );
+    }
+
+    #[test]
     fn switching_programs_reidentifies_and_returning_to_shell_clears() {
         let mut surface = surface(vec![process(4, "node")]);
         assert_eq!(
@@ -1010,7 +1061,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
     fn output_left_at_the_shell_does_not_name_the_next_program() {
         let residue = "notes: compare OpenAI Codex and Claude Code and Kimi Code";
         let mut surface = surface(vec![process(3, "zsh")]);

@@ -59,6 +59,11 @@ screen, and constrains screen evidence:
   scan. The snapshot refreshes on typing at the prompt and once when a new
   foreground job starts, before its process list arrives, because PTY writes
   from `con-cli` or the built-in agent do not advance the input generation.
+- On Windows, a process tree containing only shells also refreshes this
+  baseline and clears stale title evidence. Ancestry still does not establish
+  foreground ownership when other processes remain in the tree.
+- Exact native process names for Qoder, Hermes, Cline, Qwen and Kilo bypass
+  screen inference, preserving their icons after the fallback is narrowed.
 
 ## Verification
 
@@ -68,8 +73,11 @@ writes. A live debug build (isolated `HOME` and socket) confirmed: native
 Claude and npm Codex (node wrapper plus native `codex` in one process group)
 keep their icons while the other product is typed into their input; the shell
 restores the terminal icon; Gemini after Codex-mentioning shell output shows
-the terminal icon instead of Codex. Windows/Linux were not run; on Windows the
-shell snapshot is only taken before the first process query.
+the terminal icon instead of Codex. Windows/Linux desktop behavior was not
+tested locally. Their portable CI now runs the terminal-status and tab-identity
+tests, including shell-only tree transitions, old-banner isolation and native
+agent precedence. A retained-identity test rejects any further screen read
+after confirmation, including when input changes.
 
 Behind a PTY wrapper such as `kiro-cli-term` (or tmux/ssh) the agent is not
 in Con's foreground group, so the tab now shows the terminal icon instead of
