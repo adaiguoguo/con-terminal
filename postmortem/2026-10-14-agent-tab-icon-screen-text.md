@@ -79,6 +79,13 @@ tests, including shell-only tree transitions, old-banner isolation and native
 agent precedence. A retained-identity test rejects any further screen read
 after confirmation, including when input changes.
 
+During maintainer verification, both macOS E2E attempts on application commit
+`4bd04e30` exhausted the 30-minute job budget while building, before any E2E
+test ran. Zig provisioning took about eight minutes in each attempt. The job
+budget was increased to 60 minutes for cold builds; the tests and their
+30-second application-startup limit were not changed. Windows and Linux
+portable CI passed on that application commit, including the new tests.
+
 Behind a PTY wrapper such as `kiro-cli-term` (or tmux/ssh) the agent is not
 in Con's foreground group, so the tab now shows the terminal icon instead of
 a guessed brand. Following a wrapper's inner TTY to its foreground group
