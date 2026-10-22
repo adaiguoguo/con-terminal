@@ -11,9 +11,8 @@ pub fn cycle_app_window(reverse: bool) {
     unsafe { con_cycle_app_window(reverse) };
 }
 
-/// AppKit relocates a window only when its screen disappears. A window left
-/// with a sliver on a remaining screen after a display swap stays mostly
-/// off-screen, so pull such windows back after every display reconfiguration.
+/// AppKit can leave a window mostly off-screen after a display swap when it
+/// still intersects a remaining screen. Recheck placement after the change.
 pub fn install_offscreen_window_recovery(cx: &mut gpui::App) {
     recovery::install(cx);
 }
@@ -38,17 +37,48 @@ impl Rect {
     }
 }
 
+fn visible_area(frame: Rect, screens: &[Rect]) -> f64 {
+    // Sweep clipped screen rectangles so mirrored/overlapping displays do not
+    // count the same visible part of a window more than once.
+    let clips: Vec<_> = screens
+        .iter()
+        .filter_map(|screen| {
+            let left = frame.x.max(screen.x);
+            let right = (frame.x + frame.width).min(screen.x + screen.width);
+            let bottom = frame.y.max(screen.y);
+            let top = (frame.y + frame.height).min(screen.y + screen.height);
+            (left < right && bottom < top).then_some((left, right, bottom, top))
+        })
+        .collect();
+    let mut edges: Vec<_> = clips.iter().flat_map(|&(l, r, _, _)| [l, r]).collect();
+    edges.sort_by(f64::total_cmp);
+    edges.dedup();
+    edges
+        .windows(2)
+        .map(|edge| {
+            let mut ranges: Vec<_> = clips
+                .iter()
+                .filter(|&&(l, r, _, _)| l < edge[1] && r > edge[0])
+                .map(|&(_, _, bottom, top)| (bottom, top))
+                .collect();
+            ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut height = 0.0;
+            let mut end = f64::NEG_INFINITY;
+            for (bottom, top) in ranges {
+                height += (top - bottom.max(end)).max(0.0);
+                end = end.max(top);
+            }
+            (edge[1] - edge[0]) * height
+        })
+        .sum()
+}
+
 fn recovered_frame(frame: Rect, screens: &[Rect]) -> Option<Rect> {
     let area = frame.area();
     if area <= 0.0 {
         return None;
     }
-    // Screens never overlap, so a window spanning several still counts as visible.
-    let visible: f64 = screens
-        .iter()
-        .map(|screen| frame.intersection_area(screen))
-        .sum();
-    if visible >= area * 0.5 {
+    if visible_area(frame, screens) >= area * 0.5 {
         return None;
     }
     // NSScreen.screens lists the menu-bar screen first; prefer it on ties.
@@ -72,7 +102,8 @@ mod recovery {
     use std::{ffi::c_void, time::Duration};
 
     use cocoa::foundation::{NSPoint, NSRect, NSSize};
-    use gpui::App;
+    use futures::{FutureExt as _, StreamExt as _};
+    use gpui::{App, BackgroundExecutor};
     use objc::{
         class,
         declare::ClassDecl,
@@ -89,6 +120,29 @@ mod recovery {
     const SETTLE_DELAY: Duration = Duration::from_millis(300);
 
     type Sender = futures::channel::mpsc::UnboundedSender<()>;
+
+    pub(super) async fn next_settled_change(
+        rx: &mut futures::channel::mpsc::UnboundedReceiver<()>,
+        executor: &BackgroundExecutor,
+    ) -> bool {
+        if rx.next().await.is_none() {
+            return false;
+        }
+        loop {
+            let delay = executor.timer(SETTLE_DELAY).fuse();
+            futures::pin_mut!(delay);
+            // A later notification restarts the quiet period, including when
+            // it arrives just as the previous timer expires.
+            futures::select_biased! {
+                next = rx.next().fuse() => {
+                    if next.is_none() {
+                        return false;
+                    }
+                },
+                _ = delay => return true,
+            }
+        }
+    }
 
     extern "C" fn changed(this: &Object, _: Sel, _: *mut Object) {
         unsafe {
@@ -165,10 +219,7 @@ mod recovery {
     pub(super) fn install(cx: &mut App) {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
         cx.spawn(async move |cx| {
-            use futures::StreamExt as _;
-            while rx.next().await.is_some() {
-                cx.background_executor().timer(SETTLE_DELAY).await;
-                while rx.try_recv().is_ok() {}
+            while next_settled_change(&mut rx, cx.background_executor()).await {
                 cx.update(|_| recover_windows());
             }
         })
@@ -187,6 +238,8 @@ mod recovery {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
     use super::{Rect, recovered_frame};
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -254,5 +307,111 @@ mod tests {
             recovered_frame(frame, &screens),
             Some(rect(0.0, 145.0, 1200.0, 800.0))
         );
+    }
+
+    #[test]
+    fn leaves_frames_alone_without_usable_geometry() {
+        let screen = rect(0.0, 0.0, 1512.0, 945.0);
+        assert_eq!(
+            recovered_frame(rect(-2000.0, 0.0, 1200.0, 800.0), &[]),
+            None
+        );
+        assert_eq!(recovered_frame(rect(0.0, 0.0, 0.0, 800.0), &[screen]), None);
+        assert_eq!(
+            recovered_frame(rect(0.0, 0.0, 1200.0, 0.0), &[screen]),
+            None
+        );
+    }
+
+    #[test]
+    fn keeps_window_at_exactly_half_visibility() {
+        assert_eq!(
+            recovered_frame(
+                rect(-600.0, 0.0, 1200.0, 800.0),
+                &[rect(0.0, 0.0, 1512.0, 945.0)],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fits_window_on_screen_with_negative_coordinates() {
+        assert_eq!(
+            recovered_frame(
+                rect(-2000.0, -300.0, 1200.0, 800.0),
+                &[
+                    rect(0.0, 0.0, 1512.0, 945.0),
+                    rect(-1280.0, -200.0, 1280.0, 720.0),
+                ],
+            ),
+            Some(rect(-1280.0, -200.0, 1200.0, 720.0))
+        );
+    }
+
+    #[test]
+    fn overlapping_screens_do_not_make_an_offscreen_window_look_visible() {
+        let screen = rect(0.0, 0.0, 1512.0, 945.0);
+        let frame = rect(-800.0, 0.0, 1200.0, 800.0);
+        assert_eq!(
+            recovered_frame(frame, &[screen, screen]),
+            Some(rect(0.0, 0.0, 1200.0, 800.0))
+        );
+        assert_eq!(
+            super::visible_area(
+                rect(0.0, 0.0, 100.0, 100.0),
+                &[rect(0.0, 0.0, 60.0, 60.0), rect(40.0, 40.0, 60.0, 60.0),],
+            ),
+            6800.0
+        );
+    }
+
+    #[gpui::test]
+    fn recovery_waits_for_the_last_display_notification(cx: &mut gpui::TestAppContext) {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let recoveries = Rc::new(Cell::new(0));
+        let result = recoveries.clone();
+        let executor = cx.executor();
+        let _task = cx.spawn(async move |_| {
+            while super::recovery::next_settled_change(&mut rx, &executor).await {
+                result.set(result.get() + 1);
+            }
+        });
+        tx.unbounded_send(()).unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(250));
+        tx.unbounded_send(()).unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(250));
+        cx.run_until_parked();
+        assert_eq!(recoveries.get(), 0);
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        assert_eq!(recoveries.get(), 1);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(recoveries.get(), 1);
+        tx.unbounded_send(()).unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+        assert_eq!(recoveries.get(), 2);
+    }
+
+    #[gpui::test]
+    fn closing_notification_stream_cancels_pending_recovery(cx: &mut gpui::TestAppContext) {
+        let (tx, mut rx) = futures::channel::mpsc::unbounded();
+        let result = Rc::new(Cell::new(None));
+        let completed = result.clone();
+        let executor = cx.executor();
+        let _task = cx.spawn(async move |_| {
+            completed.set(Some(
+                super::recovery::next_settled_change(&mut rx, &executor).await,
+            ));
+        });
+        tx.unbounded_send(()).unwrap();
+        cx.run_until_parked();
+        drop(tx);
+        cx.run_until_parked();
+        assert_eq!(result.get(), Some(false));
     }
 }
