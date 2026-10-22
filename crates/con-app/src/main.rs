@@ -2783,6 +2783,8 @@ fn main() {
         quick_terminal::init(cx);
         #[cfg(target_os = "macos")]
         macos_windowing::install_window_cycle_shortcuts();
+        #[cfg(target_os = "macos")]
+        macos_windowing::install_offscreen_window_recovery(cx);
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             if has_open_windows(cx) {
