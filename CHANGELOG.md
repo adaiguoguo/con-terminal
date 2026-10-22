@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.146` - 2026-10-22
+
+### Fixed
+
+**macOS**
+
+- Windows left mostly off-screen after changing external displays move back
+  into view once the display arrangement settles. Fullscreen, minimized and
+  Quick Terminal windows keep their existing behavior.
+  _(PR [#504](https://github.com/nowledge-co/con-terminal/pull/504) by [@adaiguoguo](https://github.com/adaiguoguo))_
+
 ## `v0.1.0-beta.145` - 2026-10-20
 
 ### Changed

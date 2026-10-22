@@ -17,6 +17,24 @@ This creates two separate focus systems that must be kept in sync:
 
 Both must be correct for keyboard shortcuts (Cmd+W, Cmd+T, etc.) to work.
 
+## Display reconfiguration
+
+`macos_windowing` installs one application-lifetime observer for
+`NSApplicationDidChangeScreenParametersNotification`. It coalesces notifications
+until 300 ms of quiet, then reads current screen visible frames and window
+frames on the GPUI main thread. Do not cache display geometry across changes.
+
+Visible, titled, non-minimized, non-fullscreen windows with less than half
+their area on the available screens are moved onto the screen with the largest
+overlap, or the first `NSScreen` (the primary display) if completely detached.
+Windows spanning displays count the union of visible areas, without counting
+overlapping or mirrored regions twice. Oversized windows shrink to fit; their
+previous size is not automatically restored later.
+
+This is placement recovery, not focus recovery: it must not activate a window,
+change the first responder or move the borderless Quick Terminal, which owns
+its own geometry. Windows/Linux do not compile or install this observer.
+
 ---
 
 ## Problem 1 — GPUI has no focused element in editor-only tabs
