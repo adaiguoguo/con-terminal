@@ -678,7 +678,8 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
         traffic_light_position: settings_panel::traffic_light_position(gpui::px(
             workspace::CAPTION_HEIGHT,
         )),
-        ..Default::default()
+        #[cfg(not(target_os = "macos"))]
+        traffic_light_position: None,
     })
 }
 
