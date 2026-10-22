@@ -35,6 +35,8 @@ mod subscription;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
 mod window_chrome;
 use window_chrome::SETTINGS_HEADER_HEIGHT;
+#[cfg(target_os = "macos")]
+pub(crate) use window_chrome::traffic_light_position;
 pub(crate) use window_chrome::{floating_titlebar_options, settings_titlebar_options};
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);

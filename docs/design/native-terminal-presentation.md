@@ -285,6 +285,58 @@ Related investigations:
 
 ## Temporary Fork Exit Criteria
 
+### Accepted Corner Integration (2026-10-20)
+
+After accepting the shared-coverage preview and caption-material refinement,
+the maintainer requested integration and release. The Apple package now uses
+the public `wey-gu/zed` revision
+[`94f3f2c80f3e55170d485b228ad8e5107922b90b`](https://github.com/wey-gu/zed/commit/94f3f2c80f3e55170d485b228ad8e5107922b90b).
+Core `gpui-pre` and `gpui-pre-macos` remain at `655ce8b`; all three snapshot
+packages remain version 0.3.7 and paired components retain their existing pins.
+This preserves one core GPUI type identity rather than upgrading to Zed main.
+The original public presentation branch is unchanged.
+
+The Apple revision adds the two destination-alpha factors already merged in
+[official Zed #65571](https://github.com/zed-industries/zed/pull/65571), with GPU
+readback tests, to the existing presentation snapshot. It does not change
+Windows/wgpu. The presentation API submission remains
+[Zed Discussion #65433](https://github.com/zed-industries/zed/discussions/65433).
+The independent alpha-only comparison was not itself a visual fix: Con also
+needed shared native/GPU corner coverage and non-overlapping caption paint.
+
+The final candidate passed all 659 linked macOS app tests and local dark/light
+visual checks; the maintainer accepted its appearance. macOS 27 appearance,
+1x hardware and frame-rate performance are not certified by those checks.
+Replace the fork only when a compatible official package graph contains both
+the presentation contract and alpha correction, using the exit checks below.
+
+### Independent Alpha Experiment (2026-10-20)
+
+The maintainer separately authorized an independent public experiment branch,
+not production integration or modification of the existing presentation branch.
+The candidate is
+[`94f3f2c80f3e55170d485b228ad8e5107922b90b`](https://github.com/wey-gu/zed/commit/94f3f2c80f3e55170d485b228ad8e5107922b90b),
+on `fix/con-corner-alpha-ab-20261020`, based on the unchanged `655ce8b` snapshot.
+It ports only the two Apple destination-alpha factors from official Zed #65571
+and adds native GPU readback regressions. It does not port Windows/wgpu changes
+or replace the compatible snapshot with Zed main.
+
+The same three GPU tests fail before the correction: at destination alpha 0.4
+and source coverage 0.25, quads, monochrome sprites and paths return alpha 166
+instead of approximately 140. All three pass afterward, including transparent
+and opaque destination controls. All eight Apple library tests pass with the
+correction, including the existing native-presentation test. The build reports
+unchanged Cocoa deprecation warnings; they were not suppressed.
+
+The Con A/B worktree changes only the Apple package's Git revision; production
+manifests and the original public branches remain unchanged. Both previews must
+share the same Con code, pane fixture, geometry, glass, blur and appearance.
+Compare them sequentially with the same backdrop: putting one translucent
+preview behind another is not a matched visual test. GPU correctness does not
+prove that every visible corner artifact is fixed. Production integration still
+requires explicit acceptance and authorization, affected-consumer verification,
+and the usual platform coverage disclosure.
+
 Before production integration, record the public repository, full immutable
 revision, upstream submission URL, and exact snapshot/package identities here.
 The authorization is not evidence that those steps have already happened.

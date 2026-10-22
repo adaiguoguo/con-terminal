@@ -98,6 +98,8 @@ mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
 mod terminal_restore;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod terminal_scrollbar;
 mod terminal_shortcuts;
 mod terminal_url;
 mod theme;
@@ -671,6 +673,11 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
     Some(TitlebarOptions {
         title: Some("con".into()),
         appears_transparent: transparent,
+        // Centre the native buttons in con's caption row, like its controls.
+        #[cfg(target_os = "macos")]
+        traffic_light_position: settings_panel::traffic_light_position(gpui::px(
+            workspace::CAPTION_HEIGHT,
+        )),
         ..Default::default()
     })
 }

@@ -7,10 +7,21 @@ canvas with 3pt of breathing room. Its native viewport stays rectangular;
 rounded corners belong to the terminal cards, not a second enclosing mask. Terminal cards,
 including a single pane, use 2pt insets and the same 8pt corners within that
 canvas. In clean mode, a single terminal returns to zero inset and zero radius.
+A card corner that meets a rounded window corner (pane, input tray or agent
+composer) shares that corner's centre: its radius is the window radius, read
+from AppKit, less the card's clearance from both window edges, and never below
+8pt. Other corners keep 8pt. Fullscreen windows have no corner to follow. The
+radius is derived from painted bounds, so it settles back to 8pt as an adjacent
+sidebar opens rather than switching on a layout flag.
 Horizontal tabs already include bottom clearance inside their fixed-height row.
 Subtract that clearance from the canvas's top margin as the strip appears, so
-the visible tab-to-pane gap matches the 5pt lateral outer inset. Keep caption
-height and tab/control centering unchanged. The native clip, gutter paint and
+the visible tab-to-pane gap matches the 5pt lateral outer inset. The macOS
+caption row is 32pt, matching AppKit's titlebar; the traffic lights and the
+22pt controls are both centred in it, leaving 5pt around the controls. Without
+a tab strip, the card starts at the row's bottom edge, so the space below the
+controls equals the space above them. A docked caption gives its row back and
+the card keeps its full 5pt top clearance. The strip's appearance does not
+change caption height or tab/control centering. The native clip, gutter paint and
 agent panel top use the same top geometry.
 The original divider hit
 targets remain available between them. Following maintainer feedback on 2026-10-17,
@@ -26,6 +37,12 @@ rasterization; contact shading uses small corner masks and narrow side masks.
 It must not tint the terminal interior. Edge geometry snaps to the native
 terminal's physical pixel grid. This is a scoped exception to the borderless
 design, not permission to frame every control.
+Pane exterior corners use one normalized circular alpha mask through GPUI's
+supersampled SVG atlas, reflected into four small tiles. Equal device sizes
+share the same entry across panes, positions and theme colors; tint is applied
+when painting. Keep the curve aligned with the native clip and fine contour,
+not inset as a second outline. Skip tiles that snap to zero size during reveal.
+The mask is geometric coverage, not a full-pane image or a new icon asset.
 Pane titles align to the leading edge and surface tabs use the UI font, without
 a nested track or redundant surface count. Their close and rename actions stay
 in the same pane-local scope.
@@ -156,16 +173,24 @@ have its old split-sized mask.
   the path's bounds even if it has a hole. The caption row owns its own material,
   so docking controls does not double-composite the sidebar background.
 - AppKit clips terminal host layers against the shared rectangular viewport
-  and each leaf's rectangular card bounds. GPUI owns decorative rounding for
-  both header and native content; do not antialias the same curve again in
-  the native mask or header fill. A view-backed NSScrollView must first
+  and each leaf's rounded card bounds. Terminal title/surface header material
+  is a noninteractive AppKit sibling below GPUI, with the same upper corner
+  radius. GPUI retains header text, controls and the common card surround;
+  it must not add another rounded header fill to its transparent overlay.
+  A translucent exterior cutout cannot erase rectangular terminal or
+  header pixels underneath it: exclude those pixels before compositing the
+  workspace material. A view-backed NSScrollView must first
   receive its own backing layer when a clip is required. A Metal-backed
   terminal descendant does not
   guarantee that the scroll host has a layer. Leave the window parent alone.
 - Corner cutouts use one circular curve with tangent-continuous endpoints.
-  Do not expand it to compensate for duplicate masks: competing coverage
-  boundaries make contour thickness uneven. The header is opaque and
-  rectangular behind the cutout; native content is not rounded a second time.
+  Do not expand it to compensate for masks: displaced coverage boundaries make
+  contour thickness uneven. Keep the native mask, header and contour on the
+  same snapped card bounds and radius. Native header material remains opaque
+  inside the card, with square lower corners. One material spans the title and
+  any surface strip: derive its height from the actual terminal viewport's
+  top relative to the pane, not duplicate fixed header heights. Keep the
+  terminal host's 2pt seam overdraw out of that measurement.
   Keep the rest of the terminal untouched. Leave AppKit's
   container's backing-store composition alone: Con owns host masks, not the
   parent's backing layer.
@@ -177,11 +202,24 @@ have its old split-sized mask.
   terminal translucency behind the tray.
 - The clip path is cached per host. A window-scoped geometry generation
   invalidates otherwise unchanged terminal layouts when the outer canvas moves.
-- Pane headers supply a rectangular fill; pane cutouts own their visible corners.
+- Resolve each card's four corner radii from its snapped bounds and use those
+  same values for GPUI contours/cutouts and the native pane mask. Forward its
+  upper pair to native header material; a uniform native radius beneath a
+  larger translucent exterior cutout can expose native pixels outside the curve.
+  Radius-only changes invalidate cached paths. Clamp radii to half the smaller
+  card dimension, including during small-pane layouts. The native header's
+  material path is independent of the shared workspace clip.
+- A header below another header has square top corners, avoiding holes at the
+  title/surface-strip join. An undecorated single terminal keeps a zero radius.
+- Header material follows its host's visibility, including tab/surface changes
+  and pane zoom. No-header layouts hide the cached material, even if a later
+  visibility update reveals the terminal. Detachment removes the sibling.
+  Cache unchanged geometry, color, scale and visibility before allocating color
+  objects or changing layers; do not rebuild native decoration on terminal output.
 - Existing frame-scoped native presentation synchronization remains in place.
   A shape mask must not introduce an opaque terminal backing, a second glass
   fill or a delayed geometry update.
-- Each macOS terminal host intersects its pane-local rectangle with the
+- Each macOS terminal host intersects its pane-local rounded rectangle with the
   workspace mask. Cache both paths and remove unnecessary masks once the host
   is fully contained in rectangular pane and workspace bounds. A zero-radius
   smaller pane still needs clipping. Never attach pane-local clipping to the shared

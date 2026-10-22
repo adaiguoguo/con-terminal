@@ -4,6 +4,65 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.145` - 2026-10-20
+
+### Changed
+
+**macOS**
+
+- Workspace cards follow the window's outer corners, with more even spacing
+  around title-bar controls and centred traffic lights.
+  _(PR [#496](https://github.com/nowledge-co/con-terminal/pull/496) by [@yetone](https://github.com/yetone))_
+
+### Fixed
+
+**macOS**
+
+- Transparent pane corners stay smooth in light and dark themes, without
+  bright speckles or dark rims. The compact title bar no longer has a dark
+  strip above the panes. Transparency and blur are preserved.
+  _(PR [#502](https://github.com/nowledge-co/con-terminal/pull/502) by [@wey-gu](https://github.com/wey-gu))_
+
+**Linux**
+
+- Terminal output can be scrolled back. The mouse wheel and touchpad move
+  through scrollback (or scroll pagers such as `less`), Shift+PgUp and
+  Shift+PgDn page through it, and a scrollbar shows the position and can be
+  dragged. Shift+wheel scrolls Con's view even inside programs that use the
+  mouse.
+  _(PR [#499](https://github.com/nowledge-co/con-terminal/pull/499) by [@Towerism](https://github.com/Towerism))_
+
+## `v0.1.0-beta.144` - 2026-10-20
+
+### Fixed
+
+**macOS**
+
+- Split-pane titles and surface tabs use the same native material composition
+  as terminal content, avoiding the extra dark outline at their rounded corners.
+  _(PR [#501](https://github.com/nowledge-co/con-terminal/pull/501) by [@wey-gu](https://github.com/wey-gu))_
+
+## `v0.1.0-beta.143` - 2026-10-20
+
+### Fixed
+
+**macOS**
+
+- Transparent terminal panes clip content and headers to their rounded corners
+  to reduce square color remnants outside the pane outline. A dark rim can
+  still be visible around translucent corners; that remains under investigation.
+  _(PR [#500](https://github.com/nowledge-co/con-terminal/pull/500) by [@wey-gu](https://github.com/wey-gu))_
+
+## `v0.1.0-beta.142` - 2026-10-19
+
+### Fixed
+
+**macOS**
+
+- Homebrew casks use a supported macOS requirement, fixing installation and
+  upgrade failures caused by an obsolete operating-system version check.
+  _(PR [#494](https://github.com/nowledge-co/con-terminal/pull/494) by [@colmugx](https://github.com/colmugx))_
+
 ## `v0.1.0-beta.141` - 2026-10-18
 
 ### Fixed

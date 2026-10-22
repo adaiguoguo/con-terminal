@@ -31,3 +31,7 @@ jobs:
           bash scripts/macos/test-stapler-retry.sh
           bash scripts/macos/test-prebuilt-app.sh
           bash scripts/macos/test-dependencies.sh
+      - name: Validate generated Homebrew casks
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew ruby scripts/macos/test-homebrew-cask.rb

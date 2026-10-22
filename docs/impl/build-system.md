@@ -41,6 +41,22 @@ its separate PowerShell installer and existing request timeout.
 
 ## Native Packaging
 
+### Homebrew Casks
+
+The macOS release workflow generates both casks from its inline template.
+Use `depends_on :macos` for the platform requirement: old macOS release symbols
+can disappear from Homebrew even when Ruby syntax still parses correctly.
+This does not change the app binary's deployment target.
+
+Run `brew ruby scripts/macos/test-homebrew-cask.rb` to load the actual template
+with Homebrew's DSL for beta/stable and ARM/Intel metadata. The macOS packaging
+fixture job runs the same test. It verifies the platform requirement, version,
+architecture URL and checksum without tapping, installing, downloading or
+executing an app. This is a cask-loading check, not a complete install/upgrade
+test. See [the incident report](../../postmortem/2026-10-19-homebrew-macos-requirement.md).
+
+### App Bundles
+
 The release workflow compiles ARM and Intel app bundles on their respective
 native runners. Signing, notarization, stapling and DMG creation run in separate
 ARM jobs. Intel binaries are not cross-compiled; Rosetta is used only to execute
